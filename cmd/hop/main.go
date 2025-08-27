@@ -65,6 +65,9 @@ func findPullZoneByName(apiKey, name string) (int64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("error making request: %v", err)
 	}
+	if resp == nil {
+		return 0, fmt.Errorf("received nil response")
+	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
@@ -113,6 +116,9 @@ func addEdgeRule(apiKey, zoneID string, rule EdgeRule) error {
 	if err != nil {
 		return fmt.Errorf("error making request: %v", err)
 	}
+	if resp == nil {
+		return fmt.Errorf("received nil response")
+	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
@@ -145,6 +151,9 @@ func listEdgeRules(apiKey, zoneID string) ([]EdgeRuleResponse, error) {
 	if err != nil {
 		return nil, fmt.Errorf("error making request: %v", err)
 	}
+	if resp == nil {
+		return nil, fmt.Errorf("received nil response")
+	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
@@ -166,7 +175,7 @@ func listEdgeRules(apiKey, zoneID string) ([]EdgeRuleResponse, error) {
 }
 
 func main() {
-	if len(os.Args) < 2 {
+	if os.Args == nil || len(os.Args) < 2 {
 		printUsage()
 		os.Exit(1)
 	}
@@ -203,6 +212,11 @@ func handleAdd() {
 	toURL := addCmd.String("to", "", "Destination URL to redirect to (required)")
 	description := addCmd.String("desc", "", "Edge rule description")
 
+	if os.Args == nil || len(os.Args) < 3 {
+		fmt.Println("Error: Not enough arguments")
+		addCmd.Usage()
+		os.Exit(1)
+	}
 	if err := addCmd.Parse(os.Args[2:]); err != nil {
 		fmt.Printf("Error parsing arguments: %v\n", err)
 		os.Exit(1)
@@ -276,6 +290,11 @@ func handleList() {
 	apiKey := listCmd.String("key", "", "Bunny CDN API key (required)")
 	pullZoneName := listCmd.String("zone", "", "Pull Zone name (required)")
 
+	if os.Args == nil || len(os.Args) < 3 {
+		fmt.Println("Error: Not enough arguments")
+		listCmd.Usage()
+		os.Exit(1)
+	}
 	if err := listCmd.Parse(os.Args[2:]); err != nil {
 		fmt.Printf("Error parsing arguments: %v\n", err)
 		os.Exit(1)
