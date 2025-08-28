@@ -1,6 +1,34 @@
 # Hop
 
+**This app is not an official one.**
+
 A Go command-line tool to manage 302 redirects in [Bunny CDN](https://bunny.net) pull zones.
+
+## Installation
+
+### From Source
+
+1. Clone the repository:
+```bash
+git clone https://github.com/StephanSchmidt/hop.git
+cd hop
+```
+
+2. Build the binary:
+```bash
+make
+```
+
+3. (Optional) Move the binary to your PATH:
+```bash
+sudo mv hop /usr/local/bin/
+```
+
+### Direct Installation with Go
+
+```bash
+go install github.com/StephanSchmidt/hop/cmd/hop@latest
+```
 
 ## Usage
 
@@ -63,5 +91,5 @@ hop list -key your-api-key -zone amazingctosite
 ## Building
 
 ```bash
-go build -o hop cmd/hop/main.go
+make
 ```
