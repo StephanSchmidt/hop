@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -379,8 +380,23 @@ func uploadDirectoryOptimized(ctx context.Context, storageZone *StorageZone, loc
 	// Start skip checker that processes streamed remote files
 	go skipChecker(localStates, remoteFiles, uploadTasks, remoteDir, results)
 
-	// Start uploader goroutine
-	go uploader(ctx, storageZone, uploadTasks, results)
+	// Start 8 parallel uploader goroutines
+	const numWorkers = 8
+	var uploaderWG sync.WaitGroup
+	uploaderWG.Add(numWorkers)
+
+	for range numWorkers {
+		go func() {
+			defer uploaderWG.Done()
+			uploader(ctx, storageZone, uploadTasks, results)
+		}()
+	}
+
+	// Close results channel when all uploaders are done
+	go func() {
+		uploaderWG.Wait()
+		close(results)
+	}()
 
 	// Collect results
 	var allResults []FileUploadStatus
@@ -419,8 +435,6 @@ func uploadDirectoryOptimized(ctx context.Context, storageZone *StorageZone, loc
 
 // uploader handles the actual file uploads
 func uploader(ctx context.Context, storageZone *StorageZone, uploadTasks <-chan FileUploadTask, results chan<- FileUploadStatus) {
-	defer close(results)
-
 	for {
 		select {
 		case task, ok := <-uploadTasks:
