@@ -1,5 +1,5 @@
 hop: go-imports
-	go build -o hop cmd/hop/main.go
+	go build -o hop ./cmd/hop
 	chmod 755 hop
 
 go-imports:
