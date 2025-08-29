@@ -42,6 +42,11 @@ hop rules add --key YOUR_API_KEY --zone PULL_ZONE_NAME --from SOURCE_URL --to DE
 hop rules list --key YOUR_API_KEY --zone PULL_ZONE_NAME
 ```
 
+### Push files to CDN storage
+```bash
+hop cdn push --key YOUR_API_KEY --zone PULL_ZONE_NAME --from LOCAL_DIRECTORY
+```
+
 ## Commands
 
 ### `rules add` - Add a new 302 redirect
@@ -69,6 +74,19 @@ hop rules list --key YOUR_API_KEY --zone PULL_ZONE_NAME
 
 **Optional Parameters:**
 - `--skip-health`: Skip HTTP health checks for faster execution
+
+### `cdn push` - Push files to CDN storage
+
+**Required Parameters:**
+- `--key`: Your Bunny CDN API key
+- `--zone`: The Pull Zone name (e.g., "amazingctosite") - will automatically lookup associated storage zone
+- `--from`: Local directory path to upload files from
+
+**Notes:**
+- Recursively uploads all files from the specified directory
+- Automatically finds the storage zone associated with the pull zone
+- Preserves directory structure in the CDN storage
+- Shows upload progress and summary
 
 ## Examples
 
@@ -105,6 +123,16 @@ hop rules check --key your-api-key --zone amazingctosite
 ### Check redirect rules without health checks
 ```bash
 hop rules check --key your-api-key --zone amazingctosite --skip-health
+```
+
+### Push local directory to CDN storage
+```bash
+hop cdn push --key your-api-key --zone amazingctosite --from ./dist
+```
+
+### Push website files to CDN
+```bash
+hop cdn push --key your-api-key --zone amazingctosite --from ./public
 ```
 
 ## Building
