@@ -107,41 +107,6 @@ func listRemoteFiles(storageZone *StorageZone, remotePath string) ([]RemoteFileI
 	return remoteFiles, nil
 }
 
-func buildRemoteFileMap(storageZone *StorageZone, remoteDir string) (map[string]RemoteFileInfo, error) {
-	fileMap := make(map[string]RemoteFileInfo)
-
-	var collectFiles func(string) error
-	collectFiles = func(currentPath string) error {
-		files, err := listRemoteFiles(storageZone, currentPath)
-		if err != nil {
-			return err
-		}
-
-		for _, file := range files {
-			if file.IsDirectory {
-				// Recursively list subdirectories
-				subPath := filepath.Join(currentPath, file.Name)
-				subPath = strings.ReplaceAll(subPath, "\\", "/")
-				if err := collectFiles(subPath); err != nil {
-					return err
-				}
-			} else {
-				// Add file to map with relative path as key
-				relPath := file.Name
-				if currentPath != "" && currentPath != "/" {
-					relPath = filepath.Join(strings.TrimPrefix(currentPath, remoteDir), file.Name)
-					relPath = strings.ReplaceAll(relPath, "\\", "/")
-				}
-				fileMap[relPath] = file
-			}
-		}
-		return nil
-	}
-
-	err := collectFiles(remoteDir)
-	return fileMap, err
-}
-
 func shouldSkipUpload(localFile LocalFileInfo, remoteFile RemoteFileInfo) (bool, string) {
 	// Compare size first (quick check)
 	if localFile.Size != remoteFile.Size {
@@ -202,6 +167,146 @@ func uploadFileToStorage(storageZone *StorageZone, localPath, remotePath string)
 	return nil
 }
 
+// buildLocalFileMap builds a complete map of local files with checksums
+func buildLocalFileMap(localDir string) (map[string]LocalFileInfo, error) {
+	localFileMap := make(map[string]LocalFileInfo)
+
+	err := filepath.Walk(localDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		// Skip directories
+		if info.IsDir() {
+			return nil
+		}
+
+		// Calculate relative path
+		relPath, err := filepath.Rel(localDir, path)
+		if err != nil {
+			return err
+		}
+
+		// Calculate checksum
+		checksum, err := calculateFileChecksum(path)
+		if err != nil {
+			fmt.Printf("⚠ Warning: Could not calculate checksum for %s: %v\n", relPath, err)
+			checksum = ""
+		}
+
+		localFileMap[strings.ReplaceAll(relPath, "\\", "/")] = LocalFileInfo{
+			Path:     path,
+			Size:     info.Size(),
+			Checksum: checksum,
+			RelPath:  strings.ReplaceAll(relPath, "\\", "/"),
+		}
+
+		return nil
+	})
+
+	return localFileMap, err
+}
+
+// remoteFileStreamer streams remote files to the skip checker
+func remoteFileStreamer(storageZone *StorageZone, remoteDir string, remoteFiles chan<- RemoteFileInfo) {
+	defer close(remoteFiles)
+
+	fmt.Println("Streaming remote file list...")
+
+	var streamFiles func(string) error
+	streamFiles = func(currentPath string) error {
+		files, err := listRemoteFiles(storageZone, currentPath)
+		if err != nil {
+			fmt.Printf("⚠ Warning: Could not list remote files in %s: %v\n", currentPath, err)
+			return nil // Continue with other directories
+		}
+
+		for _, file := range files {
+			if file.IsDirectory {
+				// Recursively stream subdirectories
+				subPath := filepath.Join(currentPath, file.Name)
+				subPath = strings.ReplaceAll(subPath, "\\", "/")
+				if err := streamFiles(subPath); err != nil {
+					return err
+				}
+			} else {
+				// Stream the file
+				relPath := file.Name
+				if currentPath != "" && currentPath != "/" {
+					relPath = filepath.Join(strings.TrimPrefix(currentPath, remoteDir), file.Name)
+					relPath = strings.ReplaceAll(relPath, "\\", "/")
+				}
+				file.Path = relPath
+
+				remoteFiles <- file
+			}
+		}
+		return nil
+	}
+
+	streamFiles(remoteDir)
+}
+
+// skipChecker processes streamed remote files and manages local file states
+func skipChecker(localStates map[string]*LocalFileState, remoteFiles <-chan RemoteFileInfo, uploadTasks chan<- FileUploadTask, remoteDir string, results chan<- FileUploadStatus) {
+	defer close(uploadTasks)
+
+	remoteCount := 0
+
+	// Process streamed remote files
+	for remoteFile := range remoteFiles {
+		remoteCount++
+
+		// Look up corresponding local file
+		localState, exists := localStates[remoteFile.Path]
+		if !exists {
+			// Remote file doesn't exist locally - ignore it
+			continue
+		}
+
+		// Mark as checked
+		localState.Checked = true
+
+		// Check if we should skip this file
+		if skip, reason := shouldSkipUpload(localState.File, remoteFile); skip {
+			localState.Skip = true
+			localState.Reason = reason
+
+			results <- FileUploadStatus{
+				Path:    localState.File.Path,
+				Success: true,
+				Skipped: true,
+				Reason:  reason,
+			}
+		} else {
+			// Need to upload this file
+			remotePath := filepath.Join(remoteDir, localState.File.RelPath)
+			remotePath = strings.ReplaceAll(remotePath, "\\", "/")
+
+			uploadTasks <- FileUploadTask{
+				LocalFile:  localState.File,
+				RemotePath: remotePath,
+			}
+		}
+	}
+
+	fmt.Printf("Processed %d remote files for comparison\n", remoteCount)
+
+	// Process any unchecked local files (they are new files)
+	for _, localState := range localStates {
+		if !localState.Checked && !localState.Skip {
+			// This is a new local file - needs uploading
+			remotePath := filepath.Join(remoteDir, localState.File.RelPath)
+			remotePath = strings.ReplaceAll(remotePath, "\\", "/")
+
+			uploadTasks <- FileUploadTask{
+				LocalFile:  localState.File,
+				RemotePath: remotePath,
+			}
+		}
+	}
+}
+
 // FileProcessTask represents a file that needs processing
 type FileProcessTask struct {
 	Path    string
@@ -215,165 +320,97 @@ type FileUploadTask struct {
 	RemotePath string
 }
 
+// LocalFileState tracks the state of local files during processing
+type LocalFileState struct {
+	File    LocalFileInfo
+	Checked bool
+	Skip    bool
+	Reason  string
+}
+
 func uploadDirectoryOptimized(storageZone *StorageZone, localDir, remoteDir string) []FileUploadStatus {
-	fmt.Println("Starting concurrent file upload...")
-	
-	// Get remote file list first
-	fmt.Println("Fetching remote file list...")
-	remoteFileMap, err := buildRemoteFileMap(storageZone, remoteDir)
+	fmt.Println("Starting streaming concurrent file upload...")
+
+	// Build complete local file list with checksums first
+	fmt.Println("Building local file list with checksums...")
+	localFileMap, err := buildLocalFileMap(localDir)
 	if err != nil {
-		fmt.Printf("⚠ Warning: Could not fetch remote file list: %v\n", err)
-		fmt.Println("Proceeding with upload without optimization...")
-		remoteFileMap = make(map[string]RemoteFileInfo)
-	} else {
-		fmt.Printf("Found %d remote files\n", len(remoteFileMap))
+		return []FileUploadStatus{{
+			Path:    localDir,
+			Success: false,
+			Error:   fmt.Errorf("failed to build local file list: %v", err),
+		}}
+	}
+
+	fmt.Printf("Found %d local files\n", len(localFileMap))
+
+	// Initialize local file states
+	localStates := make(map[string]*LocalFileState)
+	for relPath, localFile := range localFileMap {
+		localStates[relPath] = &LocalFileState{
+			File:    localFile,
+			Checked: false,
+			Skip:    false,
+			Reason:  "",
+		}
 	}
 
 	// Channels for communication between goroutines
-	fileProcessTasks := make(chan FileProcessTask, 100)
+	remoteFiles := make(chan RemoteFileInfo, 100)
 	uploadTasks := make(chan FileUploadTask, 10)
 	results := make(chan FileUploadStatus, 100)
-	
-	// Start file processor goroutine
-	go fileProcessor(fileProcessTasks, uploadTasks, remoteFileMap, remoteDir, results)
-	
+
+	// Start remote file streamer
+	go remoteFileStreamer(storageZone, remoteDir, remoteFiles)
+
+	// Start skip checker that processes streamed remote files
+	go skipChecker(localStates, remoteFiles, uploadTasks, remoteDir, results)
+
 	// Start uploader goroutine
 	go uploader(storageZone, uploadTasks, results)
-	
-	// Walk the directory and send files to processor
-	go func() {
-		defer close(fileProcessTasks)
-		
-		filepath.Walk(localDir, func(path string, info os.FileInfo, err error) error {
-			if err != nil {
-				results <- FileUploadStatus{
-					Path:    path,
-					Success: false,
-					Error:   err,
-				}
-				return nil
-			}
 
-			// Skip directories
-			if info.IsDir() {
-				return nil
-			}
-
-			// Calculate relative path
-			relPath, err := filepath.Rel(localDir, path)
-			if err != nil {
-				results <- FileUploadStatus{
-					Path:    path,
-					Success: false,
-					Error:   err,
-				}
-				return nil
-			}
-
-			// Send to processor
-			fileProcessTasks <- FileProcessTask{
-				Path:    path,
-				RelPath: strings.ReplaceAll(relPath, "\\", "/"),
-				Size:    info.Size(),
-			}
-			
-			return nil
-		})
-	}()
-	
 	// Collect results
 	var allResults []FileUploadStatus
 	skipped := 0
 	uploaded := 0
 	failed := 0
-	
-	// We need to know when both goroutines are done
-	done := make(chan bool, 2)
-	
+
+	// We need to know when processing is done
+	done := make(chan bool, 1)
+
 	go func() {
 		for result := range results {
 			allResults = append(allResults, result)
-			
+
 			if result.Success {
 				if result.Skipped {
-					fmt.Printf("⏭ Skipped: %s (%s)\n", result.Path, result.Reason)
+					fmt.Printf("⏭ Skipped: %s (%s)\n", filepath.Base(result.Path), result.Reason)
 					skipped++
 				} else {
-					fmt.Printf("✓ Uploaded: %s\n", result.Path)
+					fmt.Printf("✓ Uploaded: %s\n", filepath.Base(result.Path))
 					uploaded++
 				}
 			} else {
-				fmt.Printf("✗ Failed: %s (%v)\n", result.Path, result.Error)
+				fmt.Printf("✗ Failed: %s (%v)\n", filepath.Base(result.Path), result.Error)
 				failed++
 			}
 		}
 		done <- true
 	}()
-	
-	// Wait for processing and uploading to complete
-	go func() {
-		<-done // Wait for result collection to finish
-		done <- true
-	}()
-	
+
 	<-done // Wait for everything to complete
-	
+
 	fmt.Printf("\n%d uploaded, %d skipped, %d failed\n", uploaded, skipped, failed)
 	return allResults
-}
-
-// fileProcessor processes files, calculates checksums, and determines what needs uploading
-func fileProcessor(tasks <-chan FileProcessTask, uploadTasks chan<- FileUploadTask, remoteFileMap map[string]RemoteFileInfo, remoteDir string, results chan<- FileUploadStatus) {
-	defer close(uploadTasks)
-	
-	for task := range tasks {
-		// Calculate checksum
-		checksum, err := calculateFileChecksum(task.Path)
-		if err != nil {
-			fmt.Printf("⚠ Warning: Could not calculate checksum for %s: %v\n", task.RelPath, err)
-			checksum = ""
-		}
-		
-		localFile := LocalFileInfo{
-			Path:     task.Path,
-			Size:     task.Size,
-			Checksum: checksum,
-			RelPath:  task.RelPath,
-		}
-		
-		// Check if we should skip this file
-		remoteFile, exists := remoteFileMap[task.RelPath]
-		if exists {
-			if skip, reason := shouldSkipUpload(localFile, remoteFile); skip {
-				results <- FileUploadStatus{
-					Path:    task.Path,
-					Success: true,
-					Skipped: true,
-					Reason:  reason,
-				}
-				continue
-			}
-		}
-		
-		// Convert to forward slashes for URL paths
-		remotePath := filepath.Join(remoteDir, task.RelPath)
-		remotePath = strings.ReplaceAll(remotePath, "\\", "/")
-		
-		// Send to uploader
-		uploadTasks <- FileUploadTask{
-			LocalFile:  localFile,
-			RemotePath: remotePath,
-		}
-	}
 }
 
 // uploader handles the actual file uploads
 func uploader(storageZone *StorageZone, uploadTasks <-chan FileUploadTask, results chan<- FileUploadStatus) {
 	defer close(results)
-	
+
 	for task := range uploadTasks {
 		err := uploadFileToStorage(storageZone, task.LocalFile.Path, task.RemotePath)
-		
+
 		results <- FileUploadStatus{
 			Path:    task.LocalFile.Path,
 			Success: err == nil,
