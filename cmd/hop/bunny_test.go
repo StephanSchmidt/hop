@@ -8,10 +8,10 @@ import (
 
 func TestBunnyTimeUnmarshalJSON(t *testing.T) {
 	tests := []struct {
-		name       string
-		input      []byte
-		wantTime   time.Time
-		wantError  bool
+		name      string
+		input     []byte
+		wantTime  time.Time
+		wantError bool
 	}{
 		{
 			name:      "Bunny CDN format",
@@ -67,19 +67,19 @@ func TestBunnyTimeUnmarshalJSON(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var bt BunnyTime
 			err := json.Unmarshal(tt.input, &bt)
-			
+
 			if tt.wantError {
 				if err == nil {
 					t.Errorf("BunnyTime.UnmarshalJSON() expected error but got none")
 				}
 				return
 			}
-			
+
 			if err != nil {
 				t.Errorf("BunnyTime.UnmarshalJSON() unexpected error: %v", err)
 				return
 			}
-			
+
 			if !bt.Time.Equal(tt.wantTime) {
 				t.Errorf("BunnyTime.UnmarshalJSON() time = %v, want %v", bt.Time, tt.wantTime)
 			}

@@ -372,23 +372,23 @@ func TestBuildRedirectMap(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := buildRedirectMap(tt.rules)
-			
+
 			// Compare SourceToDestination maps
 			if len(got.SourceToDestination) != len(tt.want.SourceToDestination) {
-				t.Errorf("buildRedirectMap() SourceToDestination length = %d, want %d", 
+				t.Errorf("buildRedirectMap() SourceToDestination length = %d, want %d",
 					len(got.SourceToDestination), len(tt.want.SourceToDestination))
 				return
 			}
-			
+
 			for key, wantValue := range tt.want.SourceToDestination {
 				if gotValue, exists := got.SourceToDestination[key]; !exists || gotValue != wantValue {
 					t.Errorf("buildRedirectMap() SourceToDestination[%q] = %q, want %q", key, gotValue, wantValue)
 				}
 			}
-			
+
 			// Compare Rules maps length
 			if len(got.Rules) != len(tt.want.Rules) {
-				t.Errorf("buildRedirectMap() Rules length = %d, want %d", 
+				t.Errorf("buildRedirectMap() Rules length = %d, want %d",
 					len(got.Rules), len(tt.want.Rules))
 			}
 		})
