@@ -2,6 +2,9 @@ hop: go-imports
 	go build -o hop ./cmd/hop
 	chmod 755 hop
 
+test:
+	go test ./cmd/hop/
+
 go-imports:
 	go run golang.org/x/tools/cmd/goimports -w .
 
