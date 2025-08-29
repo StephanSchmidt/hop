@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -58,15 +59,15 @@ type StorageZone struct {
 	Password string `json:"Password"`
 }
 
-func findPullZoneByName(apiKey, name string) (int64, error) {
-	req, err := http.NewRequest("GET", "https://api.bunny.net/pullzone", nil)
+func findPullZoneByName(ctx context.Context, apiKey, name string) (int64, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", "https://api.bunny.net/pullzone", nil)
 	if err != nil {
 		return 0, fmt.Errorf("error creating request: %v", err)
 	}
 
 	req.Header.Set("AccessKey", apiKey)
 
-	client := &http.Client{}
+	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return 0, fmt.Errorf("error making request: %v", err)
@@ -101,17 +102,17 @@ func findPullZoneByName(apiKey, name string) (int64, error) {
 	return 0, fmt.Errorf("pull zone with name '%s' not found", name)
 }
 
-func getPullZoneDetails(apiKey, zoneID string) (*PullZoneDetails, error) {
+func getPullZoneDetails(ctx context.Context, apiKey, zoneID string) (*PullZoneDetails, error) {
 	url := fmt.Sprintf("https://api.bunny.net/pullzone/%s", zoneID)
 
-	req, err := http.NewRequest("GET", url, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("error creating request: %v", err)
 	}
 
 	req.Header.Set("AccessKey", apiKey)
 
-	client := &http.Client{}
+	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("error making request: %v", err)
@@ -139,21 +140,21 @@ func getPullZoneDetails(apiKey, zoneID string) (*PullZoneDetails, error) {
 	return &pullZone, nil
 }
 
-func getStorageZoneByPullZone(apiKey string, pullZoneID int64) (*StorageZone, error) {
-	pullZoneDetails, err := getPullZoneDetails(apiKey, fmt.Sprintf("%d", pullZoneID))
+func getStorageZoneByPullZone(ctx context.Context, apiKey string, pullZoneID int64) (*StorageZone, error) {
+	pullZoneDetails, err := getPullZoneDetails(ctx, apiKey, fmt.Sprintf("%d", pullZoneID))
 	if err != nil {
 		return nil, fmt.Errorf("error getting pull zone details: %v", err)
 	}
 
 	// Get all storage zones
-	req, err := http.NewRequest("GET", "https://api.bunny.net/storagezone", nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", "https://api.bunny.net/storagezone", nil)
 	if err != nil {
 		return nil, fmt.Errorf("error creating request: %v", err)
 	}
 
 	req.Header.Set("AccessKey", apiKey)
 
-	client := &http.Client{}
+	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("error making request: %v", err)

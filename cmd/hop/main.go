@@ -1,10 +1,12 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/alecthomas/kong"
 )
@@ -66,6 +68,9 @@ func main() {
 }
 
 func handleCDNPush() {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
 	// Verify local directory exists
 	localDir := CLI.CDN.Push.From
 	if _, err := os.Stat(localDir); os.IsNotExist(err) {
@@ -73,14 +78,14 @@ func handleCDNPush() {
 	}
 
 	// Look up pull zone by name
-	pullZoneID, err := findPullZoneByName(CLI.CDN.Push.Key, CLI.CDN.Push.Zone)
+	pullZoneID, err := findPullZoneByName(ctx, CLI.CDN.Push.Key, CLI.CDN.Push.Zone)
 	if err != nil {
 		log.Fatalf("Error finding pull zone '%s': %v", CLI.CDN.Push.Zone, err)
 	}
 	fmt.Printf("Found pull zone '%s' with ID: %d\n", CLI.CDN.Push.Zone, pullZoneID)
 
 	// Find associated storage zone
-	storageZone, err := getStorageZoneByPullZone(CLI.CDN.Push.Key, pullZoneID)
+	storageZone, err := getStorageZoneByPullZone(ctx, CLI.CDN.Push.Key, pullZoneID)
 	if err != nil {
 		log.Fatalf("Error finding storage zone: %v", err)
 	}
@@ -89,7 +94,7 @@ func handleCDNPush() {
 	// Upload directory contents
 	fmt.Printf("Uploading files from '%s' to storage zone '%s'...\n", localDir, storageZone.Name)
 
-	results := uploadDirectoryOptimized(storageZone, localDir, "")
+	results := uploadDirectoryOptimized(ctx, storageZone, localDir, "")
 
 	// Summary
 	successful := 0
@@ -121,8 +126,11 @@ func handleCDNPush() {
 }
 
 func handleAdd() {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
 	// Look up pull zone by name
-	id, err := findPullZoneByName(CLI.Rules.Add.Key, CLI.Rules.Add.Zone)
+	id, err := findPullZoneByName(ctx, CLI.Rules.Add.Key, CLI.Rules.Add.Zone)
 	if err != nil {
 		log.Fatalf("Error finding pull zone '%s': %v", CLI.Rules.Add.Zone, err)
 	}
@@ -152,7 +160,7 @@ func handleAdd() {
 		},
 	}
 
-	err = addEdgeRule(CLI.Rules.Add.Key, zoneID, rule)
+	err = addEdgeRule(ctx, CLI.Rules.Add.Key, zoneID, rule)
 	if err != nil {
 		log.Fatalf("Error adding edge rule: %v", err)
 	}
@@ -161,8 +169,11 @@ func handleAdd() {
 }
 
 func handleList() {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
 	// Look up pull zone by name
-	id, err := findPullZoneByName(CLI.Rules.List.Key, CLI.Rules.List.Zone)
+	id, err := findPullZoneByName(ctx, CLI.Rules.List.Key, CLI.Rules.List.Zone)
 	if err != nil {
 		log.Fatalf("Error finding pull zone '%s': %v", CLI.Rules.List.Zone, err)
 	}
@@ -170,7 +181,7 @@ func handleList() {
 	fmt.Printf("Found pull zone '%s' with ID: %s\n", CLI.Rules.List.Zone, zoneID)
 
 	// Get all edge rules
-	rules, err := listEdgeRules(CLI.Rules.List.Key, zoneID)
+	rules, err := listEdgeRules(ctx, CLI.Rules.List.Key, zoneID)
 	if err != nil {
 		log.Fatalf("Error listing edge rules: %v", err)
 	}
@@ -206,8 +217,11 @@ func handleList() {
 }
 
 func handleCheck() {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
 	// Look up pull zone by name
-	id, err := findPullZoneByName(CLI.Rules.Check.Key, CLI.Rules.Check.Zone)
+	id, err := findPullZoneByName(ctx, CLI.Rules.Check.Key, CLI.Rules.Check.Zone)
 	if err != nil {
 		log.Fatalf("Error finding pull zone '%s': %v", CLI.Rules.Check.Zone, err)
 	}
@@ -215,7 +229,7 @@ func handleCheck() {
 	fmt.Printf("Found pull zone '%s' with ID: %s\n", CLI.Rules.Check.Zone, zoneID)
 
 	// Get all edge rules
-	rules, err := listEdgeRules(CLI.Rules.Check.Key, zoneID)
+	rules, err := listEdgeRules(ctx, CLI.Rules.Check.Key, zoneID)
 	if err != nil {
 		log.Fatalf("Error listing edge rules: %v", err)
 	}
@@ -227,7 +241,7 @@ func handleCheck() {
 	redirectMap := buildRedirectMap(rules)
 
 	// Get pull zone details for hostname information
-	pullZoneDetails, err := getPullZoneDetails(CLI.Rules.Check.Key, zoneID)
+	pullZoneDetails, err := getPullZoneDetails(ctx, CLI.Rules.Check.Key, zoneID)
 	if err != nil {
 		log.Printf("Warning: Could not get pull zone details for hostname checking: %v", err)
 		pullZoneDetails = &PullZoneDetails{}
@@ -241,7 +255,7 @@ func handleCheck() {
 
 	if !CLI.Rules.Check.SkipHealth {
 		fmt.Println("Running HTTP health checks... (use --skip-health to skip)")
-		allIssues = append(allIssues, checkURLHealth(rules)...)
+		allIssues = append(allIssues, checkURLHealth(ctx, rules)...)
 	}
 
 	// Display results

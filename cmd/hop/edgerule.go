@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -54,7 +55,7 @@ type RedirectMap struct {
 	Rules               map[string]*EdgeRuleResponse
 }
 
-func addEdgeRule(apiKey, zoneID string, rule EdgeRule) error {
+func addEdgeRule(ctx context.Context, apiKey, zoneID string, rule EdgeRule) error {
 	jsonData, err := json.Marshal(rule)
 	if err != nil {
 		return fmt.Errorf("error marshaling JSON: %v", err)
@@ -62,7 +63,7 @@ func addEdgeRule(apiKey, zoneID string, rule EdgeRule) error {
 
 	url := fmt.Sprintf("https://api.bunny.net/pullzone/%s/edgerules/addOrUpdate", zoneID)
 
-	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return fmt.Errorf("error creating request: %v", err)
 	}
@@ -70,7 +71,7 @@ func addEdgeRule(apiKey, zoneID string, rule EdgeRule) error {
 	req.Header.Set("AccessKey", apiKey)
 	req.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{}
+	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("error making request: %v", err)
@@ -95,17 +96,17 @@ func addEdgeRule(apiKey, zoneID string, rule EdgeRule) error {
 	return nil
 }
 
-func listEdgeRules(apiKey, zoneID string) ([]EdgeRuleResponse, error) {
+func listEdgeRules(ctx context.Context, apiKey, zoneID string) ([]EdgeRuleResponse, error) {
 	url := fmt.Sprintf("https://api.bunny.net/pullzone/%s", zoneID)
 
-	req, err := http.NewRequest("GET", url, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("error creating request: %v", err)
 	}
 
 	req.Header.Set("AccessKey", apiKey)
 
-	client := &http.Client{}
+	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("error making request: %v", err)
@@ -133,7 +134,7 @@ func listEdgeRules(apiKey, zoneID string) ([]EdgeRuleResponse, error) {
 	return pullZone.EdgeRules, nil
 }
 
-func performHealthCheck(targetURL string) (int, bool, error) {
+func performHealthCheck(ctx context.Context, targetURL string) (int, bool, error) {
 	client := &http.Client{
 		Timeout: 10 * time.Second,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
@@ -144,7 +145,12 @@ func performHealthCheck(targetURL string) (int, bool, error) {
 		},
 	}
 
-	resp, err := client.Get(targetURL)
+	req, err := http.NewRequestWithContext(ctx, "GET", targetURL, nil)
+	if err != nil {
+		return 0, false, err
+	}
+
+	resp, err := client.Do(req)
 	if err != nil {
 		return 0, false, err
 	}
@@ -443,7 +449,7 @@ func checkRedirectLoops(redirectMap *RedirectMap) []CheckIssue {
 	return issues
 }
 
-func checkURLHealth(rules []EdgeRuleResponse) []CheckIssue {
+func checkURLHealth(ctx context.Context, rules []EdgeRuleResponse) []CheckIssue {
 	var issues []CheckIssue
 
 	for i, rule := range rules {
@@ -467,7 +473,7 @@ func checkURLHealth(rules []EdgeRuleResponse) []CheckIssue {
 			}
 
 			// Perform health check
-			statusCode, hasRedirect, err := performHealthCheck(destination)
+			statusCode, hasRedirect, err := performHealthCheck(ctx, destination)
 			if err != nil {
 				issues = append(issues, CheckIssue{
 					Type:     "url_health",

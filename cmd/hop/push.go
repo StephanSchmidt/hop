@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -54,13 +55,13 @@ func calculateFileChecksum(filePath string) (string, error) {
 	return strings.ToUpper(hex.EncodeToString(hash.Sum(nil))), nil
 }
 
-func listRemoteFiles(storageZone *StorageZone, remotePath string) ([]RemoteFileInfo, error) {
+func listRemoteFiles(ctx context.Context, storageZone *StorageZone, remotePath string) ([]RemoteFileInfo, error) {
 	url := fmt.Sprintf("https://storage.bunnycdn.com/%s/%s", storageZone.Name, strings.TrimPrefix(remotePath, "/"))
 	if !strings.HasSuffix(url, "/") {
 		url += "/"
 	}
 
-	req, err := http.NewRequest("GET", url, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("error creating request: %v", err)
 	}
@@ -130,7 +131,7 @@ func shouldSkipUpload(localFile LocalFileInfo, remoteFile RemoteFileInfo) (bool,
 	return false, ""
 }
 
-func uploadFileToStorage(storageZone *StorageZone, localPath, remotePath string) error {
+func uploadFileToStorage(ctx context.Context, storageZone *StorageZone, localPath, remotePath string) error {
 	// Read the file
 	// #nosec G304 - localPath comes from filepath.Walk which validates the path
 	fileContent, err := os.ReadFile(localPath)
@@ -142,7 +143,7 @@ func uploadFileToStorage(storageZone *StorageZone, localPath, remotePath string)
 	url := fmt.Sprintf("https://storage.bunnycdn.com/%s/%s", storageZone.Name, strings.TrimPrefix(remotePath, "/"))
 
 	// Create PUT request
-	req, err := http.NewRequest("PUT", url, bytes.NewReader(fileContent))
+	req, err := http.NewRequestWithContext(ctx, "PUT", url, bytes.NewReader(fileContent))
 	if err != nil {
 		return fmt.Errorf("error creating request: %v", err)
 	}
@@ -210,14 +211,20 @@ func buildLocalFileMap(localDir string) (map[string]LocalFileInfo, error) {
 }
 
 // remoteFileStreamer streams remote files to the skip checker
-func remoteFileStreamer(storageZone *StorageZone, remoteDir string, remoteFiles chan<- RemoteFileInfo) {
+func remoteFileStreamer(ctx context.Context, storageZone *StorageZone, remoteDir string, remoteFiles chan<- RemoteFileInfo) {
 	defer close(remoteFiles)
 
 	fmt.Println("Streaming remote file list...")
 
 	var streamFiles func(string) error
 	streamFiles = func(currentPath string) error {
-		files, err := listRemoteFiles(storageZone, currentPath)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		files, err := listRemoteFiles(ctx, storageZone, currentPath)
 		if err != nil {
 			fmt.Printf("⚠ Warning: Could not list remote files in %s: %v\n", currentPath, err)
 			return nil // Continue with other directories
@@ -334,7 +341,7 @@ type LocalFileState struct {
 	Reason  string
 }
 
-func uploadDirectoryOptimized(storageZone *StorageZone, localDir, remoteDir string) []FileUploadStatus {
+func uploadDirectoryOptimized(ctx context.Context, storageZone *StorageZone, localDir, remoteDir string) []FileUploadStatus {
 	fmt.Println("Starting streaming concurrent file upload...")
 
 	// Build complete local file list with checksums first
@@ -367,13 +374,13 @@ func uploadDirectoryOptimized(storageZone *StorageZone, localDir, remoteDir stri
 	results := make(chan FileUploadStatus, 100)
 
 	// Start remote file streamer
-	go remoteFileStreamer(storageZone, remoteDir, remoteFiles)
+	go remoteFileStreamer(ctx, storageZone, remoteDir, remoteFiles)
 
 	// Start skip checker that processes streamed remote files
 	go skipChecker(localStates, remoteFiles, uploadTasks, remoteDir, results)
 
 	// Start uploader goroutine
-	go uploader(storageZone, uploadTasks, results)
+	go uploader(ctx, storageZone, uploadTasks, results)
 
 	// Collect results
 	var allResults []FileUploadStatus
@@ -411,16 +418,24 @@ func uploadDirectoryOptimized(storageZone *StorageZone, localDir, remoteDir stri
 }
 
 // uploader handles the actual file uploads
-func uploader(storageZone *StorageZone, uploadTasks <-chan FileUploadTask, results chan<- FileUploadStatus) {
+func uploader(ctx context.Context, storageZone *StorageZone, uploadTasks <-chan FileUploadTask, results chan<- FileUploadStatus) {
 	defer close(results)
 
-	for task := range uploadTasks {
-		err := uploadFileToStorage(storageZone, task.LocalFile.Path, task.RemotePath)
+	for {
+		select {
+		case task, ok := <-uploadTasks:
+			if !ok {
+				return
+			}
+			err := uploadFileToStorage(ctx, storageZone, task.LocalFile.Path, task.RemotePath)
 
-		results <- FileUploadStatus{
-			Path:    task.LocalFile.Path,
-			Success: err == nil,
-			Error:   err,
+			results <- FileUploadStatus{
+				Path:    task.LocalFile.Path,
+				Success: err == nil,
+				Error:   err,
+			}
+		case <-ctx.Done():
+			return
 		}
 	}
 }
