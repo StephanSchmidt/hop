@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,12 +11,39 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
 
 	"github.com/alecthomas/kong"
 )
+
+// BunnyTime handles the non-standard timestamp format from Bunny CDN API
+type BunnyTime struct {
+	time.Time
+}
+
+func (bt *BunnyTime) UnmarshalJSON(data []byte) error {
+	// Remove quotes
+	s := strings.Trim(string(data), `"`)
+	if s == "null" || s == "" {
+		bt.Time = time.Time{}
+		return nil
+	}
+
+	// Parse the format "2025-08-29T11:10:09.594" (without timezone)
+	t, err := time.Parse("2006-01-02T15:04:05.999", s)
+	if err != nil {
+		// Fallback to standard RFC3339 parsing
+		t, err = time.Parse(time.RFC3339, s)
+		if err != nil {
+			return err
+		}
+	}
+	bt.Time = t
+	return nil
+}
 
 type EdgeRule struct {
 	Guid                string    `json:"Guid,omitempty"`
@@ -75,6 +104,36 @@ type RedirectMap struct {
 	Rules               map[string]*EdgeRuleResponse
 }
 
+type StorageZone struct {
+	Id       int64  `json:"Id"`
+	Name     string `json:"Name"`
+	Password string `json:"Password"`
+}
+
+type FileUploadStatus struct {
+	Path    string
+	Success bool
+	Error   error
+	Skipped bool
+	Reason  string
+}
+
+type RemoteFileInfo struct {
+	Name         string    `json:"ObjectName"`
+	IsDirectory  bool      `json:"IsDirectory"`
+	Size         int64     `json:"Length"`
+	LastModified BunnyTime `json:"LastChanged"`
+	Checksum     string    `json:"Checksum"`
+	Path         string
+}
+
+type LocalFileInfo struct {
+	Path     string
+	Size     int64
+	Checksum string
+	RelPath  string
+}
+
 var CLI struct {
 	Rules struct {
 		Add struct {
@@ -96,6 +155,14 @@ var CLI struct {
 			SkipHealth bool   `kong:"help='Skip HTTP health checks for faster execution'"`
 		} `kong:"cmd,help='Check redirect rules for potential issues'"`
 	} `kong:"cmd,help='Manage redirect rules'"`
+
+	CDN struct {
+		Push struct {
+			Key  string `kong:"required,help='Bunny CDN API key'"`
+			Zone string `kong:"required,help='Pull Zone name'"`
+			From string `kong:"required,help='Local directory path to upload from'"`
+		} `kong:"cmd,help='Push files from local directory to CDN storage'"`
+	} `kong:"cmd,help='Manage CDN content'"`
 }
 
 func findPullZoneByName(apiKey, name string) (int64, error) {
@@ -218,6 +285,338 @@ func getPullZoneDetails(apiKey, zoneID string) (*PullZoneDetails, error) {
 	}
 
 	return &pullZone, nil
+}
+
+func calculateFileChecksum(filePath string) (string, error) {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return "", fmt.Errorf("error opening file: %v", err)
+	}
+	defer file.Close()
+
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return "", fmt.Errorf("error calculating hash: %v", err)
+	}
+
+	return strings.ToUpper(hex.EncodeToString(hash.Sum(nil))), nil
+}
+
+func listRemoteFiles(storageZone *StorageZone, remotePath string) ([]RemoteFileInfo, error) {
+	url := fmt.Sprintf("https://storage.bunnycdn.com/%s/%s", storageZone.Name, strings.TrimPrefix(remotePath, "/"))
+	if !strings.HasSuffix(url, "/") {
+		url += "/"
+	}
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("error creating request: %v", err)
+	}
+
+	req.Header.Set("AccessKey", storageZone.Password)
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("error listing files: %v", err)
+	}
+	if resp == nil {
+		return nil, fmt.Errorf("received nil response")
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		// Directory doesn't exist, return empty list
+		return []RemoteFileInfo{}, nil
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("list files failed with status %s: %s", resp.Status, string(body))
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("error reading response: %v", err)
+	}
+
+	var remoteFiles []RemoteFileInfo
+	if err := json.Unmarshal(body, &remoteFiles); err != nil {
+		return nil, fmt.Errorf("error parsing JSON response: %v", err)
+	}
+
+	// Set the path for each file
+	for i := range remoteFiles {
+		if !remoteFiles[i].IsDirectory {
+			remoteFiles[i].Path = filepath.Join(remotePath, remoteFiles[i].Name)
+			remoteFiles[i].Path = strings.ReplaceAll(remoteFiles[i].Path, "\\", "/")
+		}
+	}
+
+	return remoteFiles, nil
+}
+
+func buildRemoteFileMap(storageZone *StorageZone, remoteDir string) (map[string]RemoteFileInfo, error) {
+	fileMap := make(map[string]RemoteFileInfo)
+
+	var collectFiles func(string) error
+	collectFiles = func(currentPath string) error {
+		files, err := listRemoteFiles(storageZone, currentPath)
+		if err != nil {
+			return err
+		}
+
+		for _, file := range files {
+			if file.IsDirectory {
+				// Recursively list subdirectories
+				subPath := filepath.Join(currentPath, file.Name)
+				subPath = strings.ReplaceAll(subPath, "\\", "/")
+				if err := collectFiles(subPath); err != nil {
+					return err
+				}
+			} else {
+				// Add file to map with relative path as key
+				relPath := file.Name
+				if currentPath != "" && currentPath != "/" {
+					relPath = filepath.Join(strings.TrimPrefix(currentPath, remoteDir), file.Name)
+					relPath = strings.ReplaceAll(relPath, "\\", "/")
+				}
+				fileMap[relPath] = file
+			}
+		}
+		return nil
+	}
+
+	err := collectFiles(remoteDir)
+	return fileMap, err
+}
+
+func shouldSkipUpload(localFile LocalFileInfo, remoteFile RemoteFileInfo) (bool, string) {
+	// Compare size first (quick check)
+	if localFile.Size != remoteFile.Size {
+		return false, ""
+	}
+
+	// If checksums are available, compare them
+	if remoteFile.Checksum != "" && localFile.Checksum != "" {
+		if localFile.Checksum == remoteFile.Checksum {
+			return true, "checksum match"
+		}
+		return false, ""
+	}
+
+	// Fallback to size comparison only
+	if localFile.Size == remoteFile.Size {
+		return true, "size match (no checksum)"
+	}
+
+	return false, ""
+}
+
+func getStorageZoneByPullZone(apiKey string, pullZoneID int64) (*StorageZone, error) {
+	pullZoneDetails, err := getPullZoneDetails(apiKey, fmt.Sprintf("%d", pullZoneID))
+	if err != nil {
+		return nil, fmt.Errorf("error getting pull zone details: %v", err)
+	}
+
+	// Get all storage zones
+	req, err := http.NewRequest("GET", "https://api.bunny.net/storagezone", nil)
+	if err != nil {
+		return nil, fmt.Errorf("error creating request: %v", err)
+	}
+
+	req.Header.Set("AccessKey", apiKey)
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("error making request: %v", err)
+	}
+	if resp == nil {
+		return nil, fmt.Errorf("received nil response")
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("API request failed with status %s: %s", resp.Status, string(body))
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("error reading response: %v", err)
+	}
+
+	var storageZones []StorageZone
+	if err := json.Unmarshal(body, &storageZones); err != nil {
+		return nil, fmt.Errorf("error parsing JSON response: %v", err)
+	}
+
+	// Find storage zone that matches the pull zone name
+	for _, zone := range storageZones {
+		if strings.EqualFold(zone.Name, pullZoneDetails.Name) {
+			return &zone, nil
+		}
+	}
+
+	return nil, fmt.Errorf("no storage zone found for pull zone '%s'", pullZoneDetails.Name)
+}
+
+func uploadFileToStorage(storageZone *StorageZone, localPath, remotePath string) error {
+	// Read the file
+	fileContent, err := os.ReadFile(localPath)
+	if err != nil {
+		return fmt.Errorf("error reading file %s: %v", localPath, err)
+	}
+
+	// Construct the storage URL
+	url := fmt.Sprintf("https://storage.bunnycdn.com/%s/%s", storageZone.Name, strings.TrimPrefix(remotePath, "/"))
+
+	// Create PUT request
+	req, err := http.NewRequest("PUT", url, bytes.NewReader(fileContent))
+	if err != nil {
+		return fmt.Errorf("error creating request: %v", err)
+	}
+
+	// Set headers
+	req.Header.Set("AccessKey", storageZone.Password)
+	req.Header.Set("Content-Type", "application/octet-stream")
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("error uploading file: %v", err)
+	}
+	if resp == nil {
+		return fmt.Errorf("received nil response")
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("upload failed with status %s: %s", resp.Status, string(body))
+	}
+
+	return nil
+}
+
+func uploadDirectoryOptimized(storageZone *StorageZone, localDir, remoteDir string) []FileUploadStatus {
+	var results []FileUploadStatus
+
+	fmt.Println("Building local file list with checksums...")
+	var localFiles []LocalFileInfo
+
+	// Build list of local files with checksums
+	err := filepath.Walk(localDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			results = append(results, FileUploadStatus{
+				Path:    path,
+				Success: false,
+				Error:   err,
+			})
+			return nil
+		}
+
+		// Skip directories
+		if info.IsDir() {
+			return nil
+		}
+
+		// Calculate relative path
+		relPath, err := filepath.Rel(localDir, path)
+		if err != nil {
+			results = append(results, FileUploadStatus{
+				Path:    path,
+				Success: false,
+				Error:   err,
+			})
+			return nil
+		}
+
+		// Calculate checksum
+		checksum, err := calculateFileChecksum(path)
+		if err != nil {
+			fmt.Printf("⚠ Warning: Could not calculate checksum for %s: %v\n", relPath, err)
+			checksum = ""
+		}
+
+		localFiles = append(localFiles, LocalFileInfo{
+			Path:     path,
+			Size:     info.Size(),
+			Checksum: checksum,
+			RelPath:  strings.ReplaceAll(relPath, "\\", "/"),
+		})
+
+		return nil
+	})
+
+	if err != nil {
+		results = append(results, FileUploadStatus{
+			Path:    localDir,
+			Success: false,
+			Error:   fmt.Errorf("directory walk failed: %v", err),
+		})
+		return results
+	}
+
+	fmt.Printf("Found %d local files\n", len(localFiles))
+	fmt.Println("Fetching remote file list...")
+
+	// Build map of remote files
+	remoteFileMap, err := buildRemoteFileMap(storageZone, remoteDir)
+	if err != nil {
+		fmt.Printf("⚠ Warning: Could not fetch remote file list: %v\n", err)
+		fmt.Println("Proceeding with upload without optimization...")
+		remoteFileMap = make(map[string]RemoteFileInfo)
+	} else {
+		fmt.Printf("Found %d remote files\n", len(remoteFileMap))
+	}
+
+	// Process each local file
+	skipped := 0
+	uploaded := 0
+	failed := 0
+
+	for _, localFile := range localFiles {
+		remoteFile, exists := remoteFileMap[localFile.RelPath]
+
+		if exists {
+			if skip, reason := shouldSkipUpload(localFile, remoteFile); skip {
+				results = append(results, FileUploadStatus{
+					Path:    localFile.Path,
+					Success: true,
+					Skipped: true,
+					Reason:  reason,
+				})
+				fmt.Printf("⏭ Skipped: %s (%s)\n", localFile.RelPath, reason)
+				skipped++
+				continue
+			}
+		}
+
+		// Convert to forward slashes for URL paths
+		remotePath := filepath.Join(remoteDir, localFile.RelPath)
+		remotePath = strings.ReplaceAll(remotePath, "\\", "/")
+
+		// Upload the file
+		err = uploadFileToStorage(storageZone, localFile.Path, remotePath)
+		results = append(results, FileUploadStatus{
+			Path:    localFile.Path,
+			Success: err == nil,
+			Error:   err,
+		})
+
+		if err == nil {
+			fmt.Printf("✓ Uploaded: %s -> %s\n", localFile.RelPath, remotePath)
+			uploaded++
+		} else {
+			fmt.Printf("✗ Failed: %s (%v)\n", localFile.RelPath, err)
+			failed++
+		}
+	}
+
+	fmt.Printf("\n%d uploaded, %d skipped, %d failed\n", uploaded, skipped, failed)
+	return results
 }
 
 func listEdgeRules(apiKey, zoneID string) ([]EdgeRuleResponse, error) {
@@ -357,6 +756,8 @@ func main() {
 		handleList()
 	case "rules check":
 		handleCheck()
+	case "cdn push":
+		handleCDNPush()
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown command: %s\n", ctx.Command())
 		_ = ctx.PrintUsage(true)
@@ -364,6 +765,60 @@ func main() {
 	}
 }
 
+func handleCDNPush() {
+	// Verify local directory exists
+	localDir := CLI.CDN.Push.From
+	if _, err := os.Stat(localDir); os.IsNotExist(err) {
+		log.Fatalf("Local directory '%s' does not exist", localDir)
+	}
+
+	// Look up pull zone by name
+	pullZoneID, err := findPullZoneByName(CLI.CDN.Push.Key, CLI.CDN.Push.Zone)
+	if err != nil {
+		log.Fatalf("Error finding pull zone '%s': %v", CLI.CDN.Push.Zone, err)
+	}
+	fmt.Printf("Found pull zone '%s' with ID: %d\n", CLI.CDN.Push.Zone, pullZoneID)
+
+	// Find associated storage zone
+	storageZone, err := getStorageZoneByPullZone(CLI.CDN.Push.Key, pullZoneID)
+	if err != nil {
+		log.Fatalf("Error finding storage zone: %v", err)
+	}
+	fmt.Printf("Found storage zone: %s\n", storageZone.Name)
+
+	// Upload directory contents
+	fmt.Printf("Uploading files from '%s' to storage zone '%s'...\n", localDir, storageZone.Name)
+
+	results := uploadDirectoryOptimized(storageZone, localDir, "")
+
+	// Summary
+	successful := 0
+	skipped := 0
+	failed := 0
+	for _, result := range results {
+		if result.Success {
+			if result.Skipped {
+				skipped++
+			} else {
+				successful++
+			}
+		} else {
+			failed++
+		}
+	}
+
+	fmt.Printf("\nUpload complete: %d uploaded, %d skipped, %d failed\n", successful, skipped, failed)
+
+	if failed > 0 {
+		fmt.Println("\nFailed uploads:")
+		for _, result := range results {
+			if !result.Success {
+				fmt.Printf("  %s: %v\n", result.Path, result.Error)
+			}
+		}
+		os.Exit(1)
+	}
+}
 
 func handleAdd() {
 	// Look up pull zone by name
@@ -382,17 +837,17 @@ func handleAdd() {
 
 	// Create the edge rule for 302 redirect using the Redirect action
 	rule := EdgeRule{
-		ActionType:          1,                        // Redirect
-		ActionParameter1:    CLI.Rules.Add.To,         // Destination URL
-		ActionParameter2:    "302",                    // Status code
-		TriggerMatchingType: 0,                        // MatchAny
+		ActionType:          1,                // Redirect
+		ActionParameter1:    CLI.Rules.Add.To, // Destination URL
+		ActionParameter2:    "302",            // Status code
+		TriggerMatchingType: 0,                // MatchAny
 		Description:         desc,
 		Enabled:             true,
 		Triggers: []Trigger{
 			{
-				Type:                0,                                // Url trigger
+				Type:                0, // Url trigger
 				PatternMatches:      []string{CLI.Rules.Add.From},
-				PatternMatchingType: 0,                               // MatchAny
+				PatternMatchingType: 0, // MatchAny
 			},
 		},
 	}
