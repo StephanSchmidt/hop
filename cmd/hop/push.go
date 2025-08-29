@@ -252,6 +252,7 @@ func skipChecker(localStates map[string]*LocalFileState, remoteFiles <-chan Remo
 	defer close(uploadTasks)
 
 	remoteCount := 0
+	remoteOnlyCount := 0
 
 	// Process streamed remote files
 	for remoteFile := range remoteFiles {
@@ -261,6 +262,7 @@ func skipChecker(localStates map[string]*LocalFileState, remoteFiles <-chan Remo
 		localState, exists := localStates[remoteFile.Path]
 		if !exists {
 			// Remote file doesn't exist locally - ignore it
+			remoteOnlyCount++
 			continue
 		}
 
@@ -290,7 +292,7 @@ func skipChecker(localStates map[string]*LocalFileState, remoteFiles <-chan Remo
 		}
 	}
 
-	fmt.Printf("Processed %d remote files for comparison\n", remoteCount)
+	fmt.Printf("Processed %d remote files for comparison (%d remote-only files ignored)\n", remoteCount, remoteOnlyCount)
 
 	// Process any unchecked local files (they are new files)
 	for _, localState := range localStates {
