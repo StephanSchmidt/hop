@@ -46,6 +46,11 @@ var CLI struct {
 			Zone string `kong:"required,help='Pull Zone name'"`
 			From string `kong:"required,help='Local directory path to upload from'"`
 		} `kong:"cmd,help='Push files from local directory to CDN storage'"`
+
+		Check struct {
+			Key  string `kong:"required,help='Bunny CDN API key'"`
+			Zone string `kong:"required,help='Pull Zone name'"`
+		} `kong:"cmd,help='Check SSL configuration for all pull zone hostnames'"`
 	} `kong:"cmd,help='Manage CDN content'"`
 
 	DNS struct {
@@ -79,6 +84,8 @@ func main() {
 		handleCheck()
 	case "cdn push":
 		handleCDNPush()
+	case "cdn check":
+		handleCDNCheck()
 	case "dns list":
 		handleDNSList()
 	case "dns check":
@@ -381,6 +388,61 @@ func handleDNSList() {
 
 	for _, record := range dnsRecords {
 		fmt.Printf("%s - %s - %s\n", record.Name, record.Type, record.Value)
+	}
+}
+
+func handleCDNCheck() {
+	baseCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	ctx := createDebugContext(baseCtx)
+
+	// Look up pull zone by name
+	pullZoneID, err := findPullZoneByName(ctx, CLI.CDN.Check.Key, CLI.CDN.Check.Zone)
+	if err != nil {
+		log.Fatalf("Error finding pull zone '%s': %v", CLI.CDN.Check.Zone, err)
+	}
+	fmt.Printf("Found pull zone '%s' with ID: %d\n", CLI.CDN.Check.Zone, pullZoneID)
+
+	// Get pull zone details to check SSL configuration
+	pullZoneDetails, err := getPullZoneDetails(ctx, CLI.CDN.Check.Key, fmt.Sprintf("%d", pullZoneID))
+	if err != nil {
+		log.Fatalf("Error getting pull zone details: %v", err)
+	}
+
+	// Check SSL configuration for all hostnames
+	allValid := true
+	issueCount := 0
+
+	// Check default hostnames by testing HTTPS connectivity
+	for _, hostname := range pullZoneDetails.Hostnames {
+		// Skip b-cdn.net hostnames as they always have SSL
+		if strings.HasSuffix(strings.ToLower(hostname.Value), ".b-cdn.net") {
+			continue
+		}
+
+		// Test SSL by making an HTTPS request
+		sslWorks := testSSLConnectivity(ctx, hostname.Value)
+		forceSSLWorks := testForceSSLRedirect(ctx, hostname.Value)
+
+		if !sslWorks {
+			fmt.Printf("ERROR %s - HTTPS not working\n", hostname.Value)
+			allValid = false
+			issueCount++
+		} else if !forceSSLWorks {
+			fmt.Printf("WARN %s - HTTPS works but HTTP not redirected to HTTPS\n", hostname.Value)
+			issueCount++
+		}
+	}
+
+	// Summary
+	if allValid && issueCount == 0 {
+		fmt.Printf("OK All hostnames have SSL properly configured\n")
+	} else if allValid {
+		fmt.Printf("OK SSL certificates active but %d warning(s) found\n", issueCount)
+	} else {
+		fmt.Printf("ERROR %d SSL configuration issue(s) found\n", issueCount)
+		os.Exit(1)
 	}
 }
 

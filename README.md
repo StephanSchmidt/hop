@@ -52,6 +52,9 @@ hop rules check --key YOUR_API_KEY --zone PULL_ZONE_NAME [--skip-health]
 ```bash
 # Push files to CDN storage
 hop cdn push --key YOUR_API_KEY --zone PULL_ZONE_NAME --from LOCAL_DIRECTORY
+
+# Check SSL configuration for all pull zone hostnames
+hop cdn check --key YOUR_API_KEY --zone PULL_ZONE_NAME
 ```
 
 ### DNS Records Management
@@ -103,6 +106,20 @@ hop dns check --key YOUR_API_KEY --zone PULL_ZONE_NAME
 - Automatically finds the storage zone associated with the pull zone
 - Preserves directory structure in the CDN storage
 - Shows upload progress and summary
+
+### `cdn check` - Check SSL configuration for all pull zone hostnames
+
+**Required Parameters:**
+- `--key`: Your Bunny CDN API key
+- `--zone`: The Pull Zone name (e.g., "amazingctosite") - will check SSL settings for all hostnames
+
+**Notes:**
+- Validates SSL configuration for both default and custom hostnames
+- Checks SSL enablement, Force SSL redirect, and certificate status
+- Automatically skips `.b-cdn.net` hostnames (SSL managed automatically by Bunny)
+- Shows detailed SSL certificate status (Active, Pending, Failed, etc.)
+- Exits with status code 1 if any SSL configuration issues are found
+- Warns about SSL enabled but not forced (HTTP still accessible)
 
 ### `dns list` - List DNS A and CNAME records for pull zone
 
@@ -194,6 +211,11 @@ hop cdn push --key your-api-key --zone amazingctosite --from ./dist
 hop cdn push --key your-api-key --zone amazingctosite --from ./public
 ```
 
+### Check SSL configuration for CDN
+```bash
+hop cdn check --key your-api-key --zone amazingctosite
+```
+
 ### List DNS records for pull zone
 ```bash
 hop dns list --key your-api-key --zone amazingctosite
@@ -210,6 +232,7 @@ hop --debug dns list --key your-api-key --zone amazingctosite
 hop --debug dns check --key your-api-key --zone amazingctosite  
 hop --debug rules check --key your-api-key --zone amazingctosite
 hop --debug cdn push --key your-api-key --zone amazingctosite --from ./dist
+hop --debug cdn check --key your-api-key --zone amazingctosite
 ```
 
 ## Building

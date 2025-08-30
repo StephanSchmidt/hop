@@ -179,7 +179,7 @@ func getAllDNSZones(ctx context.Context, apiKey string) ([]DNSZone, error) {
 		return listResponse.Items, nil
 	}
 
-	// Fallback: try parsing as direct array
+	// Fallback: try parsing as direct array (Note: arrays can't use strictUnmarshal)
 	var dnsZones []DNSZone
 	if err := json.Unmarshal(body, &dnsZones); err != nil {
 		return nil, fmt.Errorf("error parsing JSON response: %v (raw body: %s)", err, string(body)[:200])

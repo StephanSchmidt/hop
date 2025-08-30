@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"reflect"
 	"strings"
 	"time"
 )
@@ -133,7 +134,7 @@ func getPullZoneDetails(ctx context.Context, apiKey, zoneID string) (*PullZoneDe
 	}
 
 	var pullZone PullZoneDetails
-	if err := json.Unmarshal(body, &pullZone); err != nil {
+	if err := strictUnmarshal(body, &pullZone); err != nil {
 		return nil, fmt.Errorf("error parsing JSON response: %v", err)
 	}
 
@@ -174,6 +175,7 @@ func getStorageZoneByPullZone(ctx context.Context, apiKey string, pullZoneID int
 		return nil, fmt.Errorf("error reading response: %v", err)
 	}
 
+	// Note: StorageZone is an array, can't use strictUnmarshal directly
 	var storageZones []StorageZone
 	if err := json.Unmarshal(body, &storageZones); err != nil {
 		return nil, fmt.Errorf("error parsing JSON response: %v", err)
@@ -187,4 +189,141 @@ func getStorageZoneByPullZone(ctx context.Context, apiKey string, pullZoneID int
 	}
 
 	return nil, fmt.Errorf("no storage zone found for pull zone '%s'", pullZoneDetails.Name)
+}
+
+// strictUnmarshal unmarshals JSON and fails if our struct has fields that don't exist in the API response
+func strictUnmarshal(data []byte, v interface{}) error {
+	// First, unmarshal into a map to get API fields
+	var raw map[string]interface{}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+
+	// Get expected field names from the struct
+	expectedFields := getJSONFieldNames(reflect.TypeOf(v).Elem())
+
+	// Check if our struct expects fields that don't exist in the API response
+	for _, structField := range expectedFields {
+		if _, exists := raw[structField]; !exists {
+			return fmt.Errorf("struct expects field '%s' but it's not in the API response - remove from struct", structField)
+		}
+	}
+
+	// Now unmarshal normally (this will ignore extra API fields we don't care about)
+	if err := json.Unmarshal(data, v); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// getJSONFieldNames extracts JSON field names from struct tags
+func getJSONFieldNames(t reflect.Type) []string {
+	var fields []string
+	for i := 0; i < t.NumField(); i++ {
+		field := t.Field(i)
+		jsonTag := field.Tag.Get("json")
+		if jsonTag != "" && jsonTag != "-" {
+			// Handle json:"FieldName,omitempty" format
+			name := strings.Split(jsonTag, ",")[0]
+			fields = append(fields, name)
+		}
+	}
+	return fields
+}
+
+// contains checks if a slice contains a string
+func contains(slice []string, item string) bool {
+	for _, s := range slice {
+		if s == item {
+			return true
+		}
+	}
+	return false
+}
+
+// formatBoolStatus formats a boolean as a human-readable status
+func formatBoolStatus(enabled bool) string {
+	if enabled {
+		return "Enabled"
+	}
+	return "Disabled"
+}
+
+// formatSSLCertificateStatus formats SSL certificate status codes
+func formatSSLCertificateStatus(status int) string {
+	switch status {
+	case 0:
+		return "Not configured"
+	case 1:
+		return "Pending"
+	case 2:
+		return "Active"
+	case 3:
+		return "Failed"
+	case 4:
+		return "Expired"
+	default:
+		return fmt.Sprintf("Unknown (%d)", status)
+	}
+}
+
+// testSSLConnectivity tests if HTTPS works for a hostname
+func testSSLConnectivity(ctx context.Context, hostname string) bool {
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+		Transport: &http.Transport{
+			TLSHandshakeTimeout: 5 * time.Second,
+		},
+	}
+
+	url := fmt.Sprintf("https://%s/", hostname)
+	req, err := http.NewRequestWithContext(ctx, "HEAD", url, nil)
+	if err != nil {
+		return false
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return false
+	}
+	if resp != nil {
+		resp.Body.Close()
+	}
+
+	// Any HTTP response code means HTTPS is working (SSL handshake succeeded)
+	return true
+}
+
+// testForceSSLRedirect tests if HTTP requests are redirected to HTTPS
+func testForceSSLRedirect(ctx context.Context, hostname string) bool {
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			// Don't follow redirects, we want to check if redirect happens
+			return http.ErrUseLastResponse
+		},
+	}
+
+	url := fmt.Sprintf("http://%s/", hostname)
+	req, err := http.NewRequestWithContext(ctx, "HEAD", url, nil)
+	if err != nil {
+		return false
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return false
+	}
+	if resp != nil {
+		resp.Body.Close()
+	}
+
+	// Check if we get a redirect status code and if Location header points to HTTPS
+	if resp.StatusCode == 301 || resp.StatusCode == 302 {
+		location := resp.Header.Get("Location")
+		return strings.HasPrefix(strings.ToLower(location), "https://")
+	}
+
+	return false
 }
