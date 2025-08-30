@@ -2,7 +2,10 @@
 
 **This app is not an official one.**
 
-A Go command-line tool to manage 302 redirects in [Bunny CDN](https://bunny.net) pull zones.
+A Go command-line tool to use [Bunny CDN](https://bunny.net) for static sites 
+
+* Manage 302 redirects
+* Upload files to CDN storage
 
 ## Installation
 
