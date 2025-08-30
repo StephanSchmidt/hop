@@ -36,28 +36,30 @@ go install github.com/StephanSchmidt/hop/cmd/hop@latest
 
 ## Usage
 
-### Add a new redirect
+### Redirect Rules Management
 ```bash
+# Add a new redirect
 hop rules add --key YOUR_API_KEY --zone PULL_ZONE_NAME --from SOURCE_URL --to DESTINATION_URL [--desc DESCRIPTION]
-```
 
-### List existing redirects
-```bash
+# List existing redirects
 hop rules list --key YOUR_API_KEY --zone PULL_ZONE_NAME
+
+# Check redirect rules for issues
+hop rules check --key YOUR_API_KEY --zone PULL_ZONE_NAME [--skip-health]
 ```
 
-### Push files to CDN storage
+### CDN Content Management
 ```bash
+# Push files to CDN storage
 hop cdn push --key YOUR_API_KEY --zone PULL_ZONE_NAME --from LOCAL_DIRECTORY
 ```
 
-### List DNS records for pull zone
+### DNS Records Management
 ```bash
+# List DNS A and CNAME records for pull zone
 hop dns list --key YOUR_API_KEY --zone PULL_ZONE_NAME
-```
 
-### Check DNS records for pull zone
-```bash
+# Check DNS records exist for pull zone hostnames
 hop dns check --key YOUR_API_KEY --zone PULL_ZONE_NAME
 ```
 
