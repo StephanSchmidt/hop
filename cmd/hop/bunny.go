@@ -225,22 +225,15 @@ func getJSONFieldNames(t reflect.Type) []string {
 		jsonTag := field.Tag.Get("json")
 		if jsonTag != "" && jsonTag != "-" {
 			// Handle json:"FieldName,omitempty" format
-			name := strings.Split(jsonTag, ",")[0]
-			fields = append(fields, name)
+			parts := strings.Split(jsonTag, ",")
+			if len(parts) > 0 && parts[0] != "" {
+				fields = append(fields, parts[0])
+			}
 		}
 	}
 	return fields
 }
 
-// contains checks if a slice contains a string
-func contains(slice []string, item string) bool {
-	for _, s := range slice {
-		if s == item {
-			return true
-		}
-	}
-	return false
-}
 
 // formatBoolStatus formats a boolean as a human-readable status
 func formatBoolStatus(enabled bool) string {
@@ -288,7 +281,7 @@ func testSSLConnectivity(ctx context.Context, hostname string) bool {
 		return false
 	}
 	if resp != nil {
-		resp.Body.Close()
+		_ = resp.Body.Close()
 	}
 
 	// Any HTTP response code means HTTPS is working (SSL handshake succeeded)
@@ -315,9 +308,10 @@ func testForceSSLRedirect(ctx context.Context, hostname string) bool {
 	if err != nil {
 		return false
 	}
-	if resp != nil {
-		resp.Body.Close()
+	if resp == nil {
+		return false
 	}
+	defer resp.Body.Close()
 
 	// Check if we get a redirect status code and if Location header points to HTTPS
 	if resp.StatusCode == 301 || resp.StatusCode == 302 {
