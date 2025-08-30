@@ -429,7 +429,20 @@ func uploadDirectoryOptimized(ctx context.Context, storageZone *StorageZone, loc
 
 	<-done // Wait for everything to complete
 
-	fmt.Printf("\n%d uploaded, %d skipped, %d failed\n", uploaded, skipped, failed)
+	uploadedWord := "file"
+	if uploaded != 1 {
+		uploadedWord = "files"
+	}
+	skippedWord := "file" 
+	if skipped != 1 {
+		skippedWord = "files"
+	}
+	failedWord := "file"
+	if failed != 1 {
+		failedWord = "files"
+	}
+	fmt.Printf("\n%d %s uploaded, %d %s skipped, %d %s failed\n", 
+		uploaded, uploadedWord, skipped, skippedWord, failed, failedWord)
 	return allResults
 }
 

@@ -40,6 +40,14 @@ var CLI struct {
 			From string `kong:"required,help='Local directory path to upload from'"`
 		} `kong:"cmd,help='Push files from local directory to CDN storage'"`
 	} `kong:"cmd,help='Manage CDN content'"`
+
+	DNS struct {
+		List struct {
+			Key   string `kong:"required,help='Bunny CDN API key'"`
+			Zone  string `kong:"required,help='Pull Zone name'"`
+			Debug bool   `kong:"help='Show debug output with all DNS zones and records'"`
+		} `kong:"cmd,help='List DNS A and CNAME records for a pull zone'"`
+	} `kong:"cmd,help='Manage DNS records'"`
 }
 
 func main() {
@@ -60,6 +68,8 @@ func main() {
 		handleCheck()
 	case "cdn push":
 		handleCDNPush()
+	case "dns list":
+		handleDNSList()
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown command: %s\n", ctx.Command())
 		_ = ctx.PrintUsage(true)
@@ -112,7 +122,20 @@ func handleCDNPush() {
 		}
 	}
 
-	fmt.Printf("\nUpload complete: %d uploaded, %d skipped, %d failed\n", successful, skipped, failed)
+	uploadedWord := "file"
+	if successful != 1 {
+		uploadedWord = "files"
+	}
+	skippedWord := "file"
+	if skipped != 1 {
+		skippedWord = "files"
+	}
+	failedWord := "file"
+	if failed != 1 {
+		failedWord = "files"
+	}
+	fmt.Printf("\nUpload complete: %d %s uploaded, %d %s skipped, %d %s failed\n", 
+		successful, uploadedWord, skipped, skippedWord, failed, failedWord)
 
 	if failed > 0 {
 		fmt.Println("\nFailed uploads:")
@@ -199,7 +222,11 @@ func handleList() {
 		return
 	}
 
-	fmt.Printf("\nFound %d 302 redirect(s):\n", len(redirects))
+	redirectWord := "redirect"
+	if len(redirects) != 1 {
+		redirectWord = "redirects"
+	}
+	fmt.Printf("\nFound %d 302 %s:\n", len(redirects), redirectWord)
 	fmt.Println("=" + strings.Repeat("=", 70))
 
 	for i, redirect := range redirects {
@@ -234,7 +261,11 @@ func handleCheck() {
 		log.Fatalf("Error listing edge rules: %v", err)
 	}
 
-	fmt.Printf("\nRunning comprehensive redirect analysis on %d edge rules...\n", len(rules))
+	ruleWord := "rule"
+	if len(rules) != 1 {
+		ruleWord = "rules"
+	}
+	fmt.Printf("\nRunning comprehensive redirect analysis on %d edge %s...\n", len(rules), ruleWord)
 	fmt.Println("=" + strings.Repeat("=", 70))
 
 	var allIssues []CheckIssue
@@ -260,4 +291,57 @@ func handleCheck() {
 
 	// Display results
 	displayCheckResults(allIssues)
+}
+
+func handleDNSList() {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Look up pull zone by name
+	pullZoneID, err := findPullZoneByName(ctx, CLI.DNS.List.Key, CLI.DNS.List.Zone)
+	if err != nil {
+		log.Fatalf("Error finding pull zone '%s': %v", CLI.DNS.List.Zone, err)
+	}
+	fmt.Printf("Found pull zone '%s' with ID: %d\n", CLI.DNS.List.Zone, pullZoneID)
+
+	// Get pull zone details to retrieve hostnames
+	pullZoneDetails, err := getPullZoneDetails(ctx, CLI.DNS.List.Key, fmt.Sprintf("%d", pullZoneID))
+	if err != nil {
+		log.Fatalf("Error getting pull zone details: %v", err)
+	}
+
+	if len(pullZoneDetails.Hostnames) == 0 {
+		fmt.Println("No hostnames found for this pull zone.")
+		return
+	}
+
+	hostnameWord := "hostname"
+	if len(pullZoneDetails.Hostnames) != 1 {
+		hostnameWord = "hostnames"
+	}
+	fmt.Printf("Found %d %s for this pull zone:\n", len(pullZoneDetails.Hostnames), hostnameWord)
+	for _, hostname := range pullZoneDetails.Hostnames {
+		fmt.Printf("  - %s\n", hostname.Value)
+	}
+
+	// Get all DNS zones and search for matching records
+	dnsRecords, err := findDNSRecordsForHostnames(ctx, CLI.DNS.List.Key, pullZoneDetails.Hostnames, CLI.DNS.List.Debug)
+	if err != nil {
+		log.Fatalf("Error finding DNS records: %v", err)
+	}
+
+	if len(dnsRecords) == 0 {
+		fmt.Println("\nNo A or CNAME records found for these hostnames.")
+		return
+	}
+
+	recordWord := "record"
+	if len(dnsRecords) != 1 {
+		recordWord = "records"
+	}
+	fmt.Printf("\nFound %d DNS %s:\n", len(dnsRecords), recordWord)
+
+	for _, record := range dnsRecords {
+		fmt.Printf("%s - %s - %s\n", record.Name, record.Type, record.Value)
+	}
 }
