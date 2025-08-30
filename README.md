@@ -44,8 +44,8 @@ hop check --key YOUR_API_KEY --zone PULL_ZONE_NAME [--skip-health]
 
 ### Redirect Rules Management
 ```bash
-# Add a new redirect
-hop rules add --key YOUR_API_KEY --zone PULL_ZONE_NAME --from SOURCE_URL --to DESTINATION_URL [--desc DESCRIPTION]
+# Add a new redirect  
+hop rules add --key YOUR_API_KEY --zone PULL_ZONE_NAME --from TRIGGER_PATH --to DESTINATION_URL [--desc DESCRIPTION]
 
 # List existing redirects
 hop rules list --key YOUR_API_KEY --zone PULL_ZONE_NAME
@@ -95,7 +95,7 @@ hop dns check --key YOUR_API_KEY --zone PULL_ZONE_NAME
 **Required Parameters:**
 - `--key`: Your Bunny CDN API key
 - `--zone`: The Pull Zone name (e.g., "amazingctosite") - will automatically lookup the ID
-- `--from`: Source URL path to redirect from (e.g., "/old-page")
+- `--from`: Trigger path pattern to match (e.g., "*/old-page" or "*/blog/*")
 - `--to`: Destination URL to redirect to (e.g., "https://example.com/new-page")
 
 **Optional Parameters:**
@@ -175,17 +175,11 @@ The following options can be used with any command:
 
 ### `--debug` - Enable debug output
 
-Add `--debug` before any command to enable detailed debug output:
+Add `--debug` before any command for detailed troubleshooting output:
 
 ```bash
 hop --debug COMMAND [OPTIONS]
 ```
-
-**What it shows:**
-- Detailed information about API calls and responses
-- DNS zones and record matching process
-- Hostname lookup and comparison details
-- Useful for troubleshooting issues with redirects, uploads, or DNS validation
 
 ## Examples
 
@@ -201,22 +195,22 @@ hop check --key your-api-key --zone amazingctosite --skip-health
 
 ### Add a redirect for a specific page
 ```bash
-hop rules add --key your-api-key --zone amazingctosite --from "/old-page" --to "https://amazingcto.com/new-page"
+hop rules add --key your-api-key --zone amazingctosite --from "*/old-page" --to "https://amazingcto.com/new-page"
 ```
 
 ### Add a redirect with wildcard pattern
 ```bash
-hop rules add --key your-api-key --zone amazingctosite --from "/blog/*" --to "https://amazingcto.com/articles/$1"
+hop rules add --key your-api-key --zone amazingctosite --from "*/blog/*" --to "https://amazingcto.com/articles/$1"
 ```
 
 ### Add a redirect to external domain
 ```bash
-hop rules add --key your-api-key --zone amazingctosite --from "/external" --to "https://external-site.com/"
+hop rules add --key your-api-key --zone amazingctosite --from "*/external" --to "https://external-site.com/"
 ```
 
 ### Add a redirect with custom description
 ```bash
-hop rules add --key your-api-key --zone amazingctosite --from "/contact" --to "/contact-us" --desc "Redirect old contact page"
+hop rules add --key your-api-key --zone amazingctosite --from "*/contact" --to "/contact-us" --desc "Redirect old contact page"
 ```
 
 ### List all existing redirects
