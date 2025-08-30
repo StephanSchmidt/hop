@@ -6,6 +6,7 @@ A Go command-line tool to use [Bunny CDN](https://bunny.net) for static sites
 
 * Manage 302 redirects
 * Upload files to CDN storage
+* List DNS A and CNAME records for pull zones
 
 ## Installation
 
@@ -50,6 +51,16 @@ hop rules list --key YOUR_API_KEY --zone PULL_ZONE_NAME
 hop cdn push --key YOUR_API_KEY --zone PULL_ZONE_NAME --from LOCAL_DIRECTORY
 ```
 
+### List DNS records for pull zone
+```bash
+hop dns list --key YOUR_API_KEY --zone PULL_ZONE_NAME
+```
+
+### Enable debug output for any command
+```bash
+hop --debug COMMAND [OPTIONS]
+```
+
 ## Commands
 
 ### `rules add` - Add a new 302 redirect
@@ -90,6 +101,27 @@ hop cdn push --key YOUR_API_KEY --zone PULL_ZONE_NAME --from LOCAL_DIRECTORY
 - Automatically finds the storage zone associated with the pull zone
 - Preserves directory structure in the CDN storage
 - Shows upload progress and summary
+
+### `dns list` - List DNS A and CNAME records for pull zone
+
+**Required Parameters:**
+- `--key`: Your Bunny CDN API key
+- `--zone`: The Pull Zone name (e.g., "amazingctosite") - will lookup DNS records for pull zone hostnames
+
+**Notes:**
+- Finds all hostnames associated with the pull zone
+- Searches all DNS zones for A and CNAME records matching those hostnames
+- Displays records in format: `hostname - record_type - value`
+- Supports both full domain names and relative DNS record names
+
+## Global Options
+
+### `--debug` - Enable debug output
+
+**Usage:**
+- Can be used with any command: `hop --debug COMMAND [OPTIONS]`
+- Shows detailed information about API calls, DNS zones, hostname matching, etc.
+- Useful for troubleshooting DNS record matching issues
 
 ## Examples
 
@@ -136,6 +168,21 @@ hop cdn push --key your-api-key --zone amazingctosite --from ./dist
 ### Push website files to CDN
 ```bash
 hop cdn push --key your-api-key --zone amazingctosite --from ./public
+```
+
+### List DNS records for pull zone
+```bash
+hop dns list --key your-api-key --zone amazingctosite
+```
+
+### List DNS records with debug output
+```bash
+hop --debug dns list --key your-api-key --zone amazingctosite
+```
+
+### Check redirect rules with debug output
+```bash
+hop --debug rules check --key your-api-key --zone amazingctosite
 ```
 
 ## Building
