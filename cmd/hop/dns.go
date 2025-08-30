@@ -283,3 +283,45 @@ func checkDNSRecordsForHostnames(ctx context.Context, apiKey string, hostnames [
 
 	return results
 }
+
+// checkDNSRecordsStructured validates DNS records and returns structured results
+func checkDNSRecordsStructured(ctx context.Context, apiKey string, hostnames []Hostname) CheckResult {
+	var result CheckResult
+
+	validationResults := checkDNSRecordsForHostnames(ctx, apiKey, hostnames)
+
+	for _, validation := range validationResults {
+		// Skip .b-cdn.net hostnames as they're managed by Bunny
+		if strings.HasSuffix(validation.Hostname, ".b-cdn.net") {
+			result.Successful = append(result.Successful, CheckIssue{
+				Type:     "dns_skip",
+				Severity: "info",
+				Message:  fmt.Sprintf("SKIP %s (Bunny-managed)", validation.Hostname),
+				Details:  map[string]interface{}{"hostname": validation.Hostname},
+			})
+			continue
+		}
+
+		if !validation.HasRecord {
+			result.Issues = append(result.Issues, CheckIssue{
+				Type:     "dns_missing_record",
+				Severity: "error",
+				Message:  fmt.Sprintf("MISSING %s - No DNS record found", validation.Hostname),
+				Details:  map[string]interface{}{"hostname": validation.Hostname},
+			})
+		} else {
+			result.Successful = append(result.Successful, CheckIssue{
+				Type:     "dns_ok",
+				Severity: "info",
+				Message:  fmt.Sprintf("OK %s (%s -> %s)", validation.Hostname, validation.RecordType, validation.RecordValue),
+				Details: map[string]interface{}{
+					"hostname":     validation.Hostname,
+					"record_type":  validation.RecordType,
+					"record_value": validation.RecordValue,
+				},
+			})
+		}
+	}
+
+	return result
+}

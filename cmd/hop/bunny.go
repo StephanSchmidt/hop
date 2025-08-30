@@ -327,3 +327,42 @@ func testForceSSLRedirect(ctx context.Context, hostname string) bool {
 
 	return false
 }
+
+// checkSSLConfiguration validates SSL configuration for hostnames
+func checkSSLConfiguration(ctx context.Context, hostnames []Hostname) CheckResult {
+	var result CheckResult
+
+	for _, hostname := range hostnames {
+		// Test HTTPS connectivity for all hostnames
+		httpsWorking := testSSLConnectivity(ctx, hostname.Value)
+		if !httpsWorking {
+			result.Issues = append(result.Issues, CheckIssue{
+				Type:     "ssl_https_broken",
+				Severity: "error",
+				Message:  fmt.Sprintf("ERROR %s - HTTPS not working", hostname.Value),
+				Details:  map[string]interface{}{"hostname": hostname.Value},
+			})
+			continue
+		}
+
+		// Test Force SSL redirect
+		forceSSLWorking := testForceSSLRedirect(ctx, hostname.Value)
+		if !forceSSLWorking {
+			result.Issues = append(result.Issues, CheckIssue{
+				Type:     "ssl_force_ssl_disabled",
+				Severity: "warning",
+				Message:  fmt.Sprintf("WARN %s - Force SSL redirect not configured", hostname.Value),
+				Details:  map[string]interface{}{"hostname": hostname.Value},
+			})
+		} else {
+			result.Successful = append(result.Successful, CheckIssue{
+				Type:     "ssl_ok",
+				Severity: "info",
+				Message:  fmt.Sprintf("OK %s", hostname.Value),
+				Details:  map[string]interface{}{"hostname": hostname.Value},
+			})
+		}
+	}
+
+	return result
+}

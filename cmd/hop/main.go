@@ -19,6 +19,12 @@ func createDebugContext(baseCtx context.Context) context.Context {
 var CLI struct {
 	Debug bool `kong:"help='Enable debug output'"`
 
+	Check struct {
+		Key        string `kong:"required,help='Bunny CDN API key'"`
+		Zone       string `kong:"required,help='Pull Zone name'"`
+		SkipHealth bool   `kong:"help='Skip HTTP health checks for faster execution'"`
+	} `kong:"cmd,help='Run all checks (rules, DNS, SSL) for a pull zone'"`
+
 	Rules struct {
 		Add struct {
 			Key  string `kong:"required,help='Bunny CDN API key'"`
@@ -76,6 +82,8 @@ func main() {
 		}))
 
 	switch ctx.Command() {
+	case "check":
+		handleGeneralCheck()
 	case "rules add":
 		handleAdd()
 	case "rules list":
@@ -283,41 +291,14 @@ func handleCheck() {
 	zoneID := fmt.Sprintf("%d", id)
 	fmt.Printf("Found pull zone '%s' with ID: %s\n", CLI.Rules.Check.Zone, zoneID)
 
-	// Get all edge rules
-	rules, err := listEdgeRules(ctx, CLI.Rules.Check.Key, zoneID)
+	// Check rules using structured function
+	result, err := checkRulesStructured(ctx, CLI.Rules.Check.Key, zoneID, CLI.Rules.Check.SkipHealth)
 	if err != nil {
-		log.Fatalf("Error listing edge rules: %v", err)
+		log.Fatalf("Error checking rules: %v", err)
 	}
 
-	ruleWord := "rule"
-	if len(rules) != 1 {
-		ruleWord = "rules"
-	}
-	fmt.Printf("\nRunning comprehensive redirect analysis on %d edge %s...\n", len(rules), ruleWord)
-	fmt.Println("=" + strings.Repeat("=", 70))
-
-	var allIssues []CheckIssue
-	redirectMap := buildRedirectMap(rules)
-
-	// Get pull zone details for hostname information
-	pullZoneDetails, err := getPullZoneDetails(ctx, CLI.Rules.Check.Key, zoneID)
-	if err != nil {
-		log.Printf("Warning: Could not get pull zone details for hostname checking: %v", err)
-		pullZoneDetails = &PullZoneDetails{}
-	}
-
-	// Run all checks
-	allIssues = append(allIssues, checkBasicRedirectIssues(rules)...)
-	allIssues = append(allIssues, checkConfigurationIssues(rules)...)
-	allIssues = append(allIssues, checkSecurityIssues(rules, pullZoneDetails.Hostnames)...)
-	allIssues = append(allIssues, checkRedirectLoops(redirectMap)...)
-
-	if !CLI.Rules.Check.SkipHealth {
-		fmt.Println("Running HTTP health checks... (use --skip-health to skip)")
-		allIssues = append(allIssues, checkURLHealth(ctx, rules)...)
-	}
-
-	// Display results
+	// Display results using the existing display function (it expects all issues)
+	allIssues := append(result.Issues, result.Successful...)
 	displayCheckResults(allIssues)
 }
 
@@ -410,38 +391,26 @@ func handleCDNCheck() {
 		log.Fatalf("Error getting pull zone details: %v", err)
 	}
 
-	// Check SSL configuration for all hostnames
-	allValid := true
-	issueCount := 0
+	// Check SSL configuration using structured function
+	result := checkSSLConfiguration(ctx, pullZoneDetails.Hostnames)
 
-	// Check default hostnames by testing HTTPS connectivity
-	for _, hostname := range pullZoneDetails.Hostnames {
-		// Skip b-cdn.net hostnames as they always have SSL
-		if strings.HasSuffix(strings.ToLower(hostname.Value), ".b-cdn.net") {
-			continue
-		}
+	// Display results
+	for _, success := range result.Successful {
+		fmt.Println(success.Message)
+	}
+	for _, issue := range result.Issues {
+		fmt.Println(issue.Message)
+	}
 
-		// Test SSL by making an HTTPS request
-		sslWorks := testSSLConnectivity(ctx, hostname.Value)
-		forceSSLWorks := testForceSSLRedirect(ctx, hostname.Value)
-
-		if !sslWorks {
-			fmt.Printf("ERROR %s - HTTPS not working\n", hostname.Value)
-			allValid = false
-			issueCount++
-		} else if !forceSSLWorks {
-			fmt.Printf("WARN %s - HTTPS works but HTTP not redirected to HTTPS\n", hostname.Value)
-			issueCount++
+	// Summary and exit code
+	errorCount := 0
+	for _, issue := range result.Issues {
+		if issue.Severity == "error" {
+			errorCount++
 		}
 	}
 
-	// Summary
-	if allValid && issueCount == 0 {
-		fmt.Printf("OK All hostnames have SSL properly configured\n")
-	} else if allValid {
-		fmt.Printf("OK SSL certificates active but %d warning(s) found\n", issueCount)
-	} else {
-		fmt.Printf("ERROR %d SSL configuration issue(s) found\n", issueCount)
+	if errorCount > 0 {
 		os.Exit(1)
 	}
 }
@@ -462,38 +431,135 @@ func handleDNSCheck() {
 		return
 	}
 
-	// Check DNS records for each hostname
-	results := checkDNSRecordsForHostnames(ctx, CLI.DNS.Check.Key, pullZoneDetails.Hostnames)
+	// Check DNS records using structured function
+	result := checkDNSRecordsStructured(ctx, CLI.DNS.Check.Key, pullZoneDetails.Hostnames)
 
 	// Display results
-	fmt.Printf("\nDNS Record Validation Results:\n")
-	fmt.Println("=" + strings.Repeat("=", 50))
-
-	allValid := true
-	hostnameWord := "hostname"
-	if len(pullZoneDetails.Hostnames) != 1 {
-		hostnameWord = "hostnames"
+	for _, success := range result.Successful {
+		fmt.Println(success.Message)
+	}
+	for _, issue := range result.Issues {
+		fmt.Println(issue.Message)
 	}
 
-	for _, result := range results {
-		if result.HasRecord {
-			fmt.Printf("OK %s - %s record found: %s\n", result.Hostname, result.RecordType, result.RecordValue)
-		} else {
-			// Skip b-cdn.net hostnames as they are automatically managed by Bunny
-			if strings.HasSuffix(strings.ToLower(result.Hostname), ".b-cdn.net") {
-				fmt.Printf("SKIP %s - b-cdn.net hostname (automatically managed)\n", result.Hostname)
-			} else {
-				fmt.Printf("MISSING %s - No A or CNAME record found\n", result.Hostname)
-				allValid = false
+	// Summary and exit code
+	errorCount := 0
+	for _, issue := range result.Issues {
+		if issue.Severity == "error" {
+			errorCount++
+		}
+	}
+
+	if errorCount > 0 {
+		os.Exit(1)
+	}
+}
+
+func handleGeneralCheck() {
+	baseCtx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	ctx := createDebugContext(baseCtx)
+
+	fmt.Printf("Running comprehensive checks for pull zone '%s'...\n", CLI.Check.Zone)
+	fmt.Println("=" + strings.Repeat("=", 60))
+
+	// Look up pull zone by name (shared by all checks)
+	pullZoneID, err := findPullZoneByName(ctx, CLI.Check.Key, CLI.Check.Zone)
+	if err != nil {
+		log.Fatalf("Error finding pull zone '%s': %v", CLI.Check.Zone, err)
+	}
+	zoneID := fmt.Sprintf("%d", pullZoneID)
+	fmt.Printf("Found pull zone '%s' with ID: %s\n", CLI.Check.Zone, zoneID)
+
+	// Get pull zone details (needed for DNS and SSL checks)
+	pullZoneDetails, err := getPullZoneDetails(ctx, CLI.Check.Key, zoneID)
+	if err != nil {
+		log.Fatalf("Error getting pull zone details: %v", err)
+	}
+
+	hasErrors := false
+
+	// 1. Rules Check
+	fmt.Printf("\nRULES CHECK\n")
+	fmt.Println(strings.Repeat("-", 40))
+
+	rulesResult, err := checkRulesStructured(ctx, CLI.Check.Key, zoneID, CLI.Check.SkipHealth)
+	if err != nil {
+		fmt.Printf("ERROR: Failed to check rules: %v\n", err)
+		hasErrors = true
+	} else {
+		// Display rules results using existing display function
+		allIssues := append(rulesResult.Issues, rulesResult.Successful...)
+		displayCheckResults(allIssues)
+
+		// Check for errors in rules
+		for _, issue := range rulesResult.Issues {
+			if issue.Severity == "error" || issue.Severity == "critical" {
+				hasErrors = true
+				break
 			}
 		}
 	}
 
-	fmt.Println()
-	if allValid {
-		fmt.Printf("OK All %s have DNS records configured correctly.\n", hostnameWord)
+	// 2. DNS Check
+	fmt.Printf("\nDNS CHECK\n")
+	fmt.Println(strings.Repeat("-", 40))
+
+	if len(pullZoneDetails.Hostnames) == 0 {
+		fmt.Println("No hostnames found for this pull zone.")
 	} else {
-		fmt.Printf("ERROR Some hostnames are missing DNS records. Please configure DNS records for all pull zone hostnames.\n")
+		dnsResult := checkDNSRecordsStructured(ctx, CLI.Check.Key, pullZoneDetails.Hostnames)
+
+		// Display DNS results
+		for _, success := range dnsResult.Successful {
+			fmt.Println(success.Message)
+		}
+		for _, issue := range dnsResult.Issues {
+			fmt.Println(issue.Message)
+			if issue.Severity == "error" {
+				hasErrors = true
+			}
+		}
+
+		// Show summary if no issues
+		if len(dnsResult.Issues) == 0 {
+			fmt.Printf("No DNS issues found! All hostname records are properly configured.\n")
+		}
+	}
+
+	// 3. SSL Check
+	fmt.Printf("\nSSL CHECK\n")
+	fmt.Println(strings.Repeat("-", 40))
+
+	if len(pullZoneDetails.Hostnames) == 0 {
+		fmt.Println("No hostnames found for this pull zone.")
+	} else {
+		sslResult := checkSSLConfiguration(ctx, pullZoneDetails.Hostnames)
+
+		// Display SSL results
+		for _, success := range sslResult.Successful {
+			fmt.Println(success.Message)
+		}
+		for _, issue := range sslResult.Issues {
+			fmt.Println(issue.Message)
+			if issue.Severity == "error" {
+				hasErrors = true
+			}
+		}
+
+		// Show summary if no issues
+		if len(sslResult.Issues) == 0 {
+			fmt.Printf("No SSL issues found! All hostnames have SSL properly configured.\n")
+		}
+	}
+
+	// Summary
+	fmt.Printf("\n%s\n", strings.Repeat("=", 60))
+	if hasErrors {
+		fmt.Printf("OVERALL RESULT: Issues found that require attention\n")
 		os.Exit(1)
+	} else {
+		fmt.Printf("OVERALL RESULT: All checks passed successfully\n")
 	}
 }

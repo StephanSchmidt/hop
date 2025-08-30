@@ -50,6 +50,12 @@ type CheckIssue struct {
 	Details  map[string]interface{}
 }
 
+// CheckResult holds validation results with issues and successful checks
+type CheckResult struct {
+	Issues     []CheckIssue
+	Successful []CheckIssue
+}
+
 type RedirectMap struct {
 	SourceToDestination map[string]string
 	Rules               map[string]*EdgeRuleResponse
@@ -516,9 +522,50 @@ func checkURLHealth(ctx context.Context, rules []EdgeRuleResponse) []CheckIssue 
 	return issues
 }
 
+// checkRulesStructured performs all rules validation and returns structured results
+func checkRulesStructured(ctx context.Context, apiKey, zoneID string, skipHealth bool) (CheckResult, error) {
+	var result CheckResult
+
+	// Get all edge rules
+	rules, err := listEdgeRules(ctx, apiKey, zoneID)
+	if err != nil {
+		return result, fmt.Errorf("error listing edge rules: %v", err)
+	}
+
+	var allIssues []CheckIssue
+	redirectMap := buildRedirectMap(rules)
+
+	// Get pull zone details for hostname information
+	pullZoneDetails, err := getPullZoneDetails(ctx, apiKey, zoneID)
+	if err != nil {
+		pullZoneDetails = &PullZoneDetails{}
+	}
+
+	// Run all checks
+	allIssues = append(allIssues, checkBasicRedirectIssues(rules)...)
+	allIssues = append(allIssues, checkConfigurationIssues(rules)...)
+	allIssues = append(allIssues, checkSecurityIssues(rules, pullZoneDetails.Hostnames)...)
+	allIssues = append(allIssues, checkRedirectLoops(redirectMap)...)
+
+	if !skipHealth {
+		allIssues = append(allIssues, checkURLHealth(ctx, rules)...)
+	}
+
+	// Separate issues from info/successful items
+	for _, issue := range allIssues {
+		if issue.Severity == "critical" || issue.Severity == "error" || issue.Severity == "warning" {
+			result.Issues = append(result.Issues, issue)
+		} else {
+			result.Successful = append(result.Successful, issue)
+		}
+	}
+
+	return result, nil
+}
+
 func displayCheckResults(issues []CheckIssue) {
 	if len(issues) == 0 {
-		fmt.Printf("\n✅ No issues found! All redirect rules appear to be properly configured.\n")
+		fmt.Printf("No issues found! All redirect rules appear to be properly configured.\n")
 		return
 	}
 
@@ -542,18 +589,18 @@ func displayCheckResults(issues []CheckIssue) {
 	}
 
 	// Display summary
-	fmt.Printf("\n📊 ANALYSIS SUMMARY:\n")
-	fmt.Printf("   🔴 Critical: %d\n", len(critical))
-	fmt.Printf("   ❌ Errors: %d\n", len(errors))
-	fmt.Printf("   ⚠️  Warnings: %d\n", len(warnings))
-	fmt.Printf("   ℹ️  Info: %d\n", len(info))
+	fmt.Printf("\nANALYSIS SUMMARY:\n")
+	fmt.Printf("   Critical: %d\n", len(critical))
+	fmt.Printf("   Errors: %d\n", len(errors))
+	fmt.Printf("   Warnings: %d\n", len(warnings))
+	fmt.Printf("   Info: %d\n", len(info))
 	fmt.Println()
 
 	// Display issues by severity
-	displayIssueGroup("🔴 CRITICAL ISSUES", critical)
-	displayIssueGroup("❌ ERRORS", errors)
-	displayIssueGroup("⚠️  WARNINGS", warnings)
-	displayIssueGroup("ℹ️  INFORMATION", info)
+	displayIssueGroup("CRITICAL ISSUES", critical)
+	displayIssueGroup("ERRORS", errors)
+	displayIssueGroup("WARNINGS", warnings)
+	displayIssueGroup("INFORMATION", info)
 }
 
 func displayIssueGroup(title string, issues []CheckIssue) {

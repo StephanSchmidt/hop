@@ -36,6 +36,12 @@ go install github.com/StephanSchmidt/hop/cmd/hop@latest
 
 ## Usage
 
+### Comprehensive Check
+```bash
+# Run all checks (rules, DNS, SSL) for a pull zone
+hop check --key YOUR_API_KEY --zone PULL_ZONE_NAME [--skip-health]
+```
+
 ### Redirect Rules Management
 ```bash
 # Add a new redirect
@@ -67,6 +73,22 @@ hop dns check --key YOUR_API_KEY --zone PULL_ZONE_NAME
 ```
 
 ## Commands
+
+### `check` - Run all checks (rules, DNS, SSL) for a pull zone
+
+**Required Parameters:**
+- `--key`: Your Bunny CDN API key
+- `--zone`: The Pull Zone name (e.g., "amazingctosite") - will automatically lookup the ID
+
+**Optional Parameters:**
+- `--skip-health`: Skip HTTP health checks for faster execution
+
+**What it does:**
+- Runs comprehensive redirect rule analysis (same as `rules check`)
+- Validates DNS A and CNAME records exist for all pull zone hostnames
+- Tests SSL/HTTPS connectivity and Force SSL redirect configuration
+- Provides a unified summary of all issues found
+- Exits with status code 1 if any errors are found
 
 ### `rules add` - Add a new 302 redirect
 
@@ -111,15 +133,16 @@ hop dns check --key YOUR_API_KEY --zone PULL_ZONE_NAME
 
 **Required Parameters:**
 - `--key`: Your Bunny CDN API key
-- `--zone`: The Pull Zone name (e.g., "amazingctosite") - will check SSL settings for all hostnames
+- `--zone`: The Pull Zone name (e.g., "amazingctosite") - will test SSL connectivity for all hostnames
 
 **Notes:**
-- Validates SSL configuration for both default and custom hostnames
-- Checks SSL enablement, Force SSL redirect, and certificate status
+- Tests actual HTTPS connectivity by making requests to each hostname
+- Tests Force SSL redirect by checking if HTTP requests redirect to HTTPS
 - Automatically skips `.b-cdn.net` hostnames (SSL managed automatically by Bunny)
-- Shows detailed SSL certificate status (Active, Pending, Failed, etc.)
-- Exits with status code 1 if any SSL configuration issues are found
-- Warns about SSL enabled but not forced (HTTP still accessible)
+- Provides concise output: only shows issues that need attention
+- Exits with status code 1 if HTTPS is not working
+- Warns if HTTPS works but Force SSL redirect is not configured
+- Uses text indicators: OK, WARN, ERROR (no emojis)
 
 ### `dns list` - List DNS A and CNAME records for pull zone
 
@@ -165,6 +188,16 @@ hop --debug COMMAND [OPTIONS]
 - Useful for troubleshooting issues with redirects, uploads, or DNS validation
 
 ## Examples
+
+### Run comprehensive check for a pull zone
+```bash
+hop check --key your-api-key --zone amazingctosite
+```
+
+### Run comprehensive check without health checks (faster)
+```bash
+hop check --key your-api-key --zone amazingctosite --skip-health
+```
 
 ### Add a redirect for a specific page
 ```bash
@@ -228,6 +261,7 @@ hop dns check --key your-api-key --zone amazingctosite
 
 ### Debug any command (add --debug before command)
 ```bash
+hop --debug check --key your-api-key --zone amazingctosite
 hop --debug dns list --key your-api-key --zone amazingctosite
 hop --debug dns check --key your-api-key --zone amazingctosite  
 hop --debug rules check --key your-api-key --zone amazingctosite
