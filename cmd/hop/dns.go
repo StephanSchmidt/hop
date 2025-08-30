@@ -10,6 +10,16 @@ import (
 	"time"
 )
 
+// debug checks if debug mode is enabled in the context
+func debug(ctx context.Context) bool {
+	if val := ctx.Value(struct{ key string }{"debug"}); val != nil {
+		if debugEnabled, ok := val.(bool); ok {
+			return debugEnabled
+		}
+	}
+	return false
+}
+
 type DNSZone struct {
 	Id      int64       `json:"Id"`
 	Domain  string      `json:"Domain"`
@@ -171,35 +181,17 @@ func getAllDNSZones(ctx context.Context, apiKey string) ([]DNSZone, error) {
 	return dnsZones, nil
 }
 
-func findDNSRecordsForHostnames(ctx context.Context, apiKey string, hostnames []Hostname, debug bool) ([]DNSRecordFormatted, error) {
+func findDNSRecordsForHostnames(ctx context.Context, apiKey string, hostnames []Hostname) ([]DNSRecordFormatted, error) {
 	dnsZones, err := getAllDNSZones(ctx, apiKey)
 	if err != nil {
 		return nil, fmt.Errorf("error getting DNS zones: %v", err)
 	}
 
-	if debug {
-		zoneWord := "zone"
-		if len(dnsZones) != 1 {
-			zoneWord = "zones"
-		}
-		fmt.Printf("\nDEBUG: Found %d DNS %s:\n", len(dnsZones), zoneWord)
-		for _, zone := range dnsZones {
-			fmt.Printf("\nZone: %s (ID: %d)\n", zone.Domain, zone.Id)
-			fmt.Printf("  Records (%d):\n", len(zone.Records))
-			for _, record := range zone.Records {
-				if isTargetRecordType(record.Type) {
-					fmt.Printf("    %s -> %s (%s, TTL: %d)\n", record.Name, record.Value, formatDNSRecordType(record.Type), record.TTL)
-				}
-			}
-		}
-		fmt.Println()
-	}
-
 	hostnameMap := createHostnameMap(hostnames)
 
-	if debug {
-		fmt.Printf("DEBUG: Looking for hostnames: %v\n", hostnames)
-		fmt.Printf("DEBUG: Normalized hostname map: %v\n\n", hostnameMap)
+	if debug(ctx) {
+		printDNSZonesSummary(dnsZones)
+		printHostnameLookup(hostnames)
 	}
 
 	matchingRecords := filterMatchingDNSRecords(dnsZones, hostnameMap)
@@ -207,7 +199,31 @@ func findDNSRecordsForHostnames(ctx context.Context, apiKey string, hostnames []
 	return matchingRecords, nil
 }
 
-// Wrapper function for backward compatibility with tests
-func findDNSRecordsForHostnamesWithoutDebug(ctx context.Context, apiKey string, hostnames []Hostname) ([]DNSRecordFormatted, error) {
-	return findDNSRecordsForHostnames(ctx, apiKey, hostnames, false)
+// printDNSZonesSummary prints debug information about DNS zones
+func printDNSZonesSummary(dnsZones []DNSZone) {
+	zoneWord := "zone"
+	if len(dnsZones) != 1 {
+		zoneWord = "zones"
+	}
+	fmt.Printf("\nDEBUG: Found %d DNS %s:\n", len(dnsZones), zoneWord)
+
+	for _, zone := range dnsZones {
+		targetRecords := 0
+		for _, record := range zone.Records {
+			if isTargetRecordType(record.Type) {
+				targetRecords++
+			}
+		}
+		fmt.Printf("  %s (%d A/CNAME records)\n", zone.Domain, targetRecords)
+	}
+	fmt.Println()
+}
+
+// printHostnameLookup prints debug information about hostname matching
+func printHostnameLookup(hostnames []Hostname) {
+	fmt.Printf("DEBUG: Looking for these pull zone hostnames:\n")
+	for _, hostname := range hostnames {
+		fmt.Printf("  - %s\n", hostname.Value)
+	}
+	fmt.Println()
 }

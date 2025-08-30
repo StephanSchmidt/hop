@@ -154,6 +154,9 @@ func performHealthCheck(ctx context.Context, targetURL string) (int, bool, error
 	if err != nil {
 		return 0, false, err
 	}
+	if resp == nil {
+		return 0, false, fmt.Errorf("received nil response")
+	}
 	defer resp.Body.Close()
 
 	hasRedirect := resp.StatusCode >= 300 && resp.StatusCode < 400

@@ -11,7 +11,14 @@ import (
 	"github.com/alecthomas/kong"
 )
 
+// createDebugContext creates a context with debug flag from global CLI
+func createDebugContext(baseCtx context.Context) context.Context {
+	return context.WithValue(baseCtx, struct{ key string }{"debug"}, CLI.Debug)
+}
+
 var CLI struct {
+	Debug bool `kong:"help='Enable debug output'"`
+
 	Rules struct {
 		Add struct {
 			Key  string `kong:"required,help='Bunny CDN API key'"`
@@ -43,9 +50,8 @@ var CLI struct {
 
 	DNS struct {
 		List struct {
-			Key   string `kong:"required,help='Bunny CDN API key'"`
-			Zone  string `kong:"required,help='Pull Zone name'"`
-			Debug bool   `kong:"help='Show debug output with all DNS zones and records'"`
+			Key  string `kong:"required,help='Bunny CDN API key'"`
+			Zone string `kong:"required,help='Pull Zone name'"`
 		} `kong:"cmd,help='List DNS A and CNAME records for a pull zone'"`
 	} `kong:"cmd,help='Manage DNS records'"`
 }
@@ -78,8 +84,10 @@ func main() {
 }
 
 func handleCDNPush() {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	baseCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
+
+	ctx := createDebugContext(baseCtx)
 
 	// Verify local directory exists
 	localDir := CLI.CDN.Push.From
@@ -134,7 +142,7 @@ func handleCDNPush() {
 	if failed != 1 {
 		failedWord = "files"
 	}
-	fmt.Printf("\nUpload complete: %d %s uploaded, %d %s skipped, %d %s failed\n", 
+	fmt.Printf("\nUpload complete: %d %s uploaded, %d %s skipped, %d %s failed\n",
 		successful, uploadedWord, skipped, skippedWord, failed, failedWord)
 
 	if failed > 0 {
@@ -149,8 +157,10 @@ func handleCDNPush() {
 }
 
 func handleAdd() {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	baseCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+
+	ctx := createDebugContext(baseCtx)
 
 	// Look up pull zone by name
 	id, err := findPullZoneByName(ctx, CLI.Rules.Add.Key, CLI.Rules.Add.Zone)
@@ -192,8 +202,10 @@ func handleAdd() {
 }
 
 func handleList() {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	baseCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+
+	ctx := createDebugContext(baseCtx)
 
 	// Look up pull zone by name
 	id, err := findPullZoneByName(ctx, CLI.Rules.List.Key, CLI.Rules.List.Zone)
@@ -244,8 +256,10 @@ func handleList() {
 }
 
 func handleCheck() {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	baseCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
+
+	ctx := createDebugContext(baseCtx)
 
 	// Look up pull zone by name
 	id, err := findPullZoneByName(ctx, CLI.Rules.Check.Key, CLI.Rules.Check.Zone)
@@ -294,8 +308,11 @@ func handleCheck() {
 }
 
 func handleDNSList() {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	baseCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+
+	// Add debug flag to context
+	ctx := createDebugContext(baseCtx)
 
 	// Look up pull zone by name
 	pullZoneID, err := findPullZoneByName(ctx, CLI.DNS.List.Key, CLI.DNS.List.Zone)
@@ -325,7 +342,7 @@ func handleDNSList() {
 	}
 
 	// Get all DNS zones and search for matching records
-	dnsRecords, err := findDNSRecordsForHostnames(ctx, CLI.DNS.List.Key, pullZoneDetails.Hostnames, CLI.DNS.List.Debug)
+	dnsRecords, err := findDNSRecordsForHostnames(ctx, CLI.DNS.List.Key, pullZoneDetails.Hostnames)
 	if err != nil {
 		log.Fatalf("Error finding DNS records: %v", err)
 	}
