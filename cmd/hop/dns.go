@@ -41,6 +41,13 @@ type DNSRecordFormatted struct {
 	TTL   int
 }
 
+type DNSValidationResult struct {
+	Hostname    string
+	HasRecord   bool
+	RecordType  string
+	RecordValue string
+}
+
 // Side effect free functions
 
 func formatDNSRecordType(recordType int) string {
@@ -226,4 +233,53 @@ func printHostnameLookup(hostnames []Hostname) {
 		fmt.Printf("  - %s\n", hostname.Value)
 	}
 	fmt.Println()
+}
+
+// checkDNSRecordsForHostnames validates that DNS records exist for all hostnames
+func checkDNSRecordsForHostnames(ctx context.Context, apiKey string, hostnames []Hostname) []DNSValidationResult {
+	dnsZones, err := getAllDNSZones(ctx, apiKey)
+	if err != nil {
+		// Return all failed results if we can't get DNS zones
+		results := make([]DNSValidationResult, len(hostnames))
+		for i, hostname := range hostnames {
+			results[i] = DNSValidationResult{
+				Hostname:  hostname.Value,
+				HasRecord: false,
+			}
+		}
+		return results
+	}
+
+	hostnameMap := createHostnameMap(hostnames)
+
+	if debug(ctx) {
+		printDNSZonesSummary(dnsZones)
+		printHostnameLookup(hostnames)
+	}
+
+	matchingRecords := filterMatchingDNSRecords(dnsZones, hostnameMap)
+
+	// Create validation results for each hostname
+	results := make([]DNSValidationResult, len(hostnames))
+	for i, hostname := range hostnames {
+		result := DNSValidationResult{
+			Hostname:  hostname.Value,
+			HasRecord: false,
+		}
+
+		// Find matching record for this hostname
+		normalizedHostname := normalizeHostname(hostname.Value)
+		for _, record := range matchingRecords {
+			if normalizeHostname(record.Name) == normalizedHostname {
+				result.HasRecord = true
+				result.RecordType = record.Type
+				result.RecordValue = record.Value
+				break
+			}
+		}
+
+		results[i] = result
+	}
+
+	return results
 }

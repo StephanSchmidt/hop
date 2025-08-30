@@ -53,6 +53,11 @@ var CLI struct {
 			Key  string `kong:"required,help='Bunny CDN API key'"`
 			Zone string `kong:"required,help='Pull Zone name'"`
 		} `kong:"cmd,help='List DNS A and CNAME records for a pull zone'"`
+
+		Check struct {
+			Key  string `kong:"required,help='Bunny CDN API key'"`
+			Zone string `kong:"required,help='Pull Zone name'"`
+		} `kong:"cmd,help='Check DNS records exist for pull zone hostnames'"`
 	} `kong:"cmd,help='Manage DNS records'"`
 }
 
@@ -76,6 +81,8 @@ func main() {
 		handleCDNPush()
 	case "dns list":
 		handleDNSList()
+	case "dns check":
+		handleDNSCheck()
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown command: %s\n", ctx.Command())
 		_ = ctx.PrintUsage(true)
@@ -307,29 +314,24 @@ func handleCheck() {
 	displayCheckResults(allIssues)
 }
 
-func handleDNSList() {
-	baseCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	// Add debug flag to context
-	ctx := createDebugContext(baseCtx)
-
+// setupDNSCommand handles the common setup for DNS commands
+func setupDNSCommand(ctx context.Context, apiKey, zoneName string) (*PullZoneDetails, error) {
 	// Look up pull zone by name
-	pullZoneID, err := findPullZoneByName(ctx, CLI.DNS.List.Key, CLI.DNS.List.Zone)
+	pullZoneID, err := findPullZoneByName(ctx, apiKey, zoneName)
 	if err != nil {
-		log.Fatalf("Error finding pull zone '%s': %v", CLI.DNS.List.Zone, err)
+		return nil, fmt.Errorf("error finding pull zone '%s': %v", zoneName, err)
 	}
-	fmt.Printf("Found pull zone '%s' with ID: %d\n", CLI.DNS.List.Zone, pullZoneID)
+	fmt.Printf("Found pull zone '%s' with ID: %d\n", zoneName, pullZoneID)
 
 	// Get pull zone details to retrieve hostnames
-	pullZoneDetails, err := getPullZoneDetails(ctx, CLI.DNS.List.Key, fmt.Sprintf("%d", pullZoneID))
+	pullZoneDetails, err := getPullZoneDetails(ctx, apiKey, fmt.Sprintf("%d", pullZoneID))
 	if err != nil {
-		log.Fatalf("Error getting pull zone details: %v", err)
+		return nil, fmt.Errorf("error getting pull zone details: %v", err)
 	}
 
 	if len(pullZoneDetails.Hostnames) == 0 {
 		fmt.Println("No hostnames found for this pull zone.")
-		return
+		return pullZoneDetails, nil
 	}
 
 	hostnameWord := "hostname"
@@ -339,6 +341,25 @@ func handleDNSList() {
 	fmt.Printf("Found %d %s for this pull zone:\n", len(pullZoneDetails.Hostnames), hostnameWord)
 	for _, hostname := range pullZoneDetails.Hostnames {
 		fmt.Printf("  - %s\n", hostname.Value)
+	}
+
+	return pullZoneDetails, nil
+}
+
+func handleDNSList() {
+	baseCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	ctx := createDebugContext(baseCtx)
+
+	// Setup DNS command (shared logic)
+	pullZoneDetails, err := setupDNSCommand(ctx, CLI.DNS.List.Key, CLI.DNS.List.Zone)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	if len(pullZoneDetails.Hostnames) == 0 {
+		return
 	}
 
 	// Get all DNS zones and search for matching records
@@ -360,5 +381,57 @@ func handleDNSList() {
 
 	for _, record := range dnsRecords {
 		fmt.Printf("%s - %s - %s\n", record.Name, record.Type, record.Value)
+	}
+}
+
+func handleDNSCheck() {
+	baseCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	ctx := createDebugContext(baseCtx)
+
+	// Setup DNS command (shared logic)
+	pullZoneDetails, err := setupDNSCommand(ctx, CLI.DNS.Check.Key, CLI.DNS.Check.Zone)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	if len(pullZoneDetails.Hostnames) == 0 {
+		return
+	}
+
+	// Check DNS records for each hostname
+	results := checkDNSRecordsForHostnames(ctx, CLI.DNS.Check.Key, pullZoneDetails.Hostnames)
+
+	// Display results
+	fmt.Printf("\nDNS Record Validation Results:\n")
+	fmt.Println("=" + strings.Repeat("=", 50))
+
+	allValid := true
+	hostnameWord := "hostname"
+	if len(pullZoneDetails.Hostnames) != 1 {
+		hostnameWord = "hostnames"
+	}
+
+	for _, result := range results {
+		if result.HasRecord {
+			fmt.Printf("OK %s - %s record found: %s\n", result.Hostname, result.RecordType, result.RecordValue)
+		} else {
+			// Skip b-cdn.net hostnames as they are automatically managed by Bunny
+			if strings.HasSuffix(strings.ToLower(result.Hostname), ".b-cdn.net") {
+				fmt.Printf("SKIP %s - b-cdn.net hostname (automatically managed)\n", result.Hostname)
+			} else {
+				fmt.Printf("MISSING %s - No A or CNAME record found\n", result.Hostname)
+				allValid = false
+			}
+		}
+	}
+
+	fmt.Println()
+	if allValid {
+		fmt.Printf("OK All %s have DNS records configured correctly.\n", hostnameWord)
+	} else {
+		fmt.Printf("ERROR Some hostnames are missing DNS records. Please configure DNS records for all pull zone hostnames.\n")
+		os.Exit(1)
 	}
 }

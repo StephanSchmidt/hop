@@ -56,9 +56,9 @@ hop cdn push --key YOUR_API_KEY --zone PULL_ZONE_NAME --from LOCAL_DIRECTORY
 hop dns list --key YOUR_API_KEY --zone PULL_ZONE_NAME
 ```
 
-### Enable debug output for any command
+### Check DNS records for pull zone
 ```bash
-hop --debug COMMAND [OPTIONS]
+hop dns check --key YOUR_API_KEY --zone PULL_ZONE_NAME
 ```
 
 ## Commands
@@ -114,14 +114,36 @@ hop --debug COMMAND [OPTIONS]
 - Displays records in format: `hostname - record_type - value`
 - Supports both full domain names and relative DNS record names
 
+### `dns check` - Check DNS records exist for pull zone hostnames
+
+**Required Parameters:**
+- `--key`: Your Bunny CDN API key
+- `--zone`: The Pull Zone name (e.g., "amazingctosite") - will validate DNS records for pull zone hostnames
+
+**Notes:**
+- Validates that DNS records exist for all hostnames associated with the pull zone
+- Automatically skips `.b-cdn.net` hostnames (automatically managed by Bunny CDN)
+- Uses text indicators: `OK` for found records, `MISSING` for missing records, `SKIP` for ignored hostnames
+- Exits with status code 1 if any required DNS records are missing
+- Use `--debug` flag for detailed hostname matching information
+
 ## Global Options
+
+The following options can be used with any command:
 
 ### `--debug` - Enable debug output
 
-**Usage:**
-- Can be used with any command: `hop --debug COMMAND [OPTIONS]`
-- Shows detailed information about API calls, DNS zones, hostname matching, etc.
-- Useful for troubleshooting DNS record matching issues
+Add `--debug` before any command to enable detailed debug output:
+
+```bash
+hop --debug COMMAND [OPTIONS]
+```
+
+**What it shows:**
+- Detailed information about API calls and responses
+- DNS zones and record matching process
+- Hostname lookup and comparison details
+- Useful for troubleshooting issues with redirects, uploads, or DNS validation
 
 ## Examples
 
@@ -175,14 +197,17 @@ hop cdn push --key your-api-key --zone amazingctosite --from ./public
 hop dns list --key your-api-key --zone amazingctosite
 ```
 
-### List DNS records with debug output
+### Check DNS records for pull zone
 ```bash
-hop --debug dns list --key your-api-key --zone amazingctosite
+hop dns check --key your-api-key --zone amazingctosite
 ```
 
-### Check redirect rules with debug output
+### Debug any command (add --debug before command)
 ```bash
+hop --debug dns list --key your-api-key --zone amazingctosite
+hop --debug dns check --key your-api-key --zone amazingctosite  
 hop --debug rules check --key your-api-key --zone amazingctosite
+hop --debug cdn push --key your-api-key --zone amazingctosite --from ./dist
 ```
 
 ## Building

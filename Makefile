@@ -10,7 +10,9 @@ go-imports:
 
 clean:
 	go clean -cache -i
-	
+
+check: lint nilcheck sec test
+
 lint:
 	go run honnef.co/go/tools/cmd/staticcheck ./...
 	go run github.com/golangci/golangci-lint/cmd/golangci-lint run ./...
