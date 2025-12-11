@@ -1,2 +1,5 @@
 /hop
 .claude/
+.minify-cache/
+plan_rust.md
+zig_plan.md

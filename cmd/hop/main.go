@@ -8,101 +8,267 @@ import (
 	"strings"
 	"time"
 
-	"github.com/alecthomas/kong"
+	"github.com/spf13/cobra"
+)
+
+var debugFlag bool
+
+// Global flag variables
+var (
+	// Common flags
+	apiKey     string
+	zone       string
+	skipHealth bool
+
+	// Rules add specific
+	fromURL     string
+	toURL       string
+	description string
+
+	// CDN push specific
+	localDir string
+
+	// Stats specific
+	days     int
+	hourly   bool
+	detailed bool
+
+	// Minify specific
+	minifyCacheDir string
+	minifyForce    bool
+	minifyExclude  []string
 )
 
 // createDebugContext creates a context with debug flag from global CLI
 func createDebugContext(baseCtx context.Context) context.Context {
-	return context.WithValue(baseCtx, struct{ key string }{"debug"}, CLI.Debug)
-}
-
-var CLI struct {
-	Debug bool `kong:"help='Enable debug output'"`
-
-	Check struct {
-		Key        string `kong:"required,help='Bunny CDN API key'"`
-		Zone       string `kong:"required,help='Pull Zone name'"`
-		SkipHealth bool   `kong:"help='Skip HTTP health checks for faster execution'"`
-	} `kong:"cmd,help='Run all checks (rules, DNS, SSL) for a pull zone'"`
-
-	Rules struct {
-		Add struct {
-			Key  string `kong:"required,help='Bunny CDN API key'"`
-			Zone string `kong:"required,help='Pull Zone name'"`
-			From string `kong:"required,help='Source URL path to redirect from'"`
-			To   string `kong:"required,help='Destination URL to redirect to'"`
-			Desc string `kong:"help='Edge rule description'"`
-		} `kong:"cmd,help='Add a new 302 redirect'"`
-
-		List struct {
-			Key  string `kong:"required,help='Bunny CDN API key'"`
-			Zone string `kong:"required,help='Pull Zone name'"`
-		} `kong:"cmd,help='List all existing 302 redirects'"`
-
-		Check struct {
-			Key        string `kong:"required,help='Bunny CDN API key'"`
-			Zone       string `kong:"required,help='Pull Zone name'"`
-			SkipHealth bool   `kong:"help='Skip HTTP health checks for faster execution'"`
-		} `kong:"cmd,help='Check redirect rules for potential issues'"`
-	} `kong:"cmd,help='Manage redirect rules'"`
-
-	CDN struct {
-		Push struct {
-			Key  string `kong:"required,help='Bunny CDN API key'"`
-			Zone string `kong:"required,help='Pull Zone name'"`
-			From string `kong:"required,help='Local directory path to upload from'"`
-		} `kong:"cmd,help='Push files from local directory to CDN storage'"`
-
-		Check struct {
-			Key  string `kong:"required,help='Bunny CDN API key'"`
-			Zone string `kong:"required,help='Pull Zone name'"`
-		} `kong:"cmd,help='Check SSL configuration for all pull zone hostnames'"`
-	} `kong:"cmd,help='Manage CDN content'"`
-
-	DNS struct {
-		List struct {
-			Key  string `kong:"required,help='Bunny CDN API key'"`
-			Zone string `kong:"required,help='Pull Zone name'"`
-		} `kong:"cmd,help='List DNS A and CNAME records for a pull zone'"`
-
-		Check struct {
-			Key  string `kong:"required,help='Bunny CDN API key'"`
-			Zone string `kong:"required,help='Pull Zone name'"`
-		} `kong:"cmd,help='Check DNS records exist for pull zone hostnames'"`
-	} `kong:"cmd,help='Manage DNS records'"`
+	return context.WithValue(baseCtx, struct{ key string }{"debug"}, debugFlag)
 }
 
 func main() {
-	ctx := kong.Parse(&CLI,
-		kong.Name("hop"),
-		kong.Description("A Go command-line tool to manage 302 redirects in Bunny CDN pull zones."),
-		kong.UsageOnError(),
-		kong.ConfigureHelp(kong.HelpOptions{
-			Compact: true,
-		}))
-
-	switch ctx.Command() {
-	case "check":
-		handleGeneralCheck()
-	case "rules add":
-		handleAdd()
-	case "rules list":
-		handleList()
-	case "rules check":
-		handleCheck()
-	case "cdn push":
-		handleCDNPush()
-	case "cdn check":
-		handleCDNCheck()
-	case "dns list":
-		handleDNSList()
-	case "dns check":
-		handleDNSCheck()
-	default:
-		fmt.Fprintf(os.Stderr, "Unknown command: %s\n", ctx.Command())
-		_ = ctx.PrintUsage(true)
+	if err := rootCmd.Execute(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+var rootCmd = &cobra.Command{
+	Use:   "hop",
+	Short: "A Go command-line tool to manage 302 redirects, content, and statistics in Bunny CDN pull zones",
+	Long:  "A Go command-line tool to manage 302 redirects, content, and statistics in Bunny CDN pull zones.",
+}
+
+func init() {
+	rootCmd.PersistentFlags().BoolVar(&debugFlag, "debug", false, "Enable debug output")
+
+	// Add all commands to root
+	rootCmd.AddCommand(checkCmd)
+	rootCmd.AddCommand(rulesCmd)
+	rootCmd.AddCommand(cdnCmd)
+	rootCmd.AddCommand(dnsCmd)
+	rootCmd.AddCommand(statsCmd)
+	rootCmd.AddCommand(minifyCmd)
+
+	// Setup rules subcommands
+	rulesCmd.AddCommand(rulesAddCmd)
+	rulesCmd.AddCommand(rulesListCmd)
+	rulesCmd.AddCommand(rulesCheckCmd)
+
+	// Setup CDN subcommands
+	cdnCmd.AddCommand(cdnPushCmd)
+	cdnCmd.AddCommand(cdnCheckCmd)
+
+	// Setup DNS subcommands
+	dnsCmd.AddCommand(dnsListCmd)
+	dnsCmd.AddCommand(dnsCheckCmd)
+
+	// Setup stats subcommands
+	statsCmd.AddCommand(statsShowCmd)
+
+	// Setup flags for check command
+	checkCmd.Flags().StringVarP(&apiKey, "key", "k", "", "Bunny CDN API key (required)")
+	checkCmd.Flags().StringVarP(&zone, "zone", "z", "", "Pull Zone name (required)")
+	checkCmd.Flags().BoolVar(&skipHealth, "skip-health", false, "Skip HTTP health checks for faster execution")
+	_ = checkCmd.MarkFlagRequired("key")
+	_ = checkCmd.MarkFlagRequired("zone")
+
+	// Setup flags for rules add command
+	rulesAddCmd.Flags().StringVarP(&apiKey, "key", "k", "", "Bunny CDN API key (required)")
+	rulesAddCmd.Flags().StringVarP(&zone, "zone", "z", "", "Pull Zone name (required)")
+	rulesAddCmd.Flags().StringVar(&fromURL, "from", "", "Source URL path to redirect from (required)")
+	rulesAddCmd.Flags().StringVar(&toURL, "to", "", "Destination URL to redirect to (required)")
+	rulesAddCmd.Flags().StringVar(&description, "desc", "", "Edge rule description")
+	_ = rulesAddCmd.MarkFlagRequired("key")
+	_ = rulesAddCmd.MarkFlagRequired("zone")
+	_ = rulesAddCmd.MarkFlagRequired("from")
+	_ = rulesAddCmd.MarkFlagRequired("to")
+
+	// Setup flags for rules list command
+	rulesListCmd.Flags().StringVarP(&apiKey, "key", "k", "", "Bunny CDN API key (required)")
+	rulesListCmd.Flags().StringVarP(&zone, "zone", "z", "", "Pull Zone name (required)")
+	_ = rulesListCmd.MarkFlagRequired("key")
+	_ = rulesListCmd.MarkFlagRequired("zone")
+
+	// Setup flags for rules check command
+	rulesCheckCmd.Flags().StringVarP(&apiKey, "key", "k", "", "Bunny CDN API key (required)")
+	rulesCheckCmd.Flags().StringVarP(&zone, "zone", "z", "", "Pull Zone name (required)")
+	rulesCheckCmd.Flags().BoolVar(&skipHealth, "skip-health", false, "Skip HTTP health checks for faster execution")
+	_ = rulesCheckCmd.MarkFlagRequired("key")
+	_ = rulesCheckCmd.MarkFlagRequired("zone")
+
+	// Setup flags for CDN push command
+	cdnPushCmd.Flags().StringVarP(&apiKey, "key", "k", "", "Bunny CDN API key (required)")
+	cdnPushCmd.Flags().StringVarP(&zone, "zone", "z", "", "Pull Zone name (required)")
+	cdnPushCmd.Flags().StringVar(&localDir, "from", "", "Local directory path to upload from (required)")
+	_ = cdnPushCmd.MarkFlagRequired("key")
+	_ = cdnPushCmd.MarkFlagRequired("zone")
+	_ = cdnPushCmd.MarkFlagRequired("from")
+
+	// Setup flags for CDN check command
+	cdnCheckCmd.Flags().StringVarP(&apiKey, "key", "k", "", "Bunny CDN API key (required)")
+	cdnCheckCmd.Flags().StringVarP(&zone, "zone", "z", "", "Pull Zone name (required)")
+	_ = cdnCheckCmd.MarkFlagRequired("key")
+	_ = cdnCheckCmd.MarkFlagRequired("zone")
+
+	// Setup flags for DNS list command
+	dnsListCmd.Flags().StringVarP(&apiKey, "key", "k", "", "Bunny CDN API key (required)")
+	dnsListCmd.Flags().StringVarP(&zone, "zone", "z", "", "Pull Zone name (required)")
+	_ = dnsListCmd.MarkFlagRequired("key")
+	_ = dnsListCmd.MarkFlagRequired("zone")
+
+	// Setup flags for DNS check command
+	dnsCheckCmd.Flags().StringVarP(&apiKey, "key", "k", "", "Bunny CDN API key (required)")
+	dnsCheckCmd.Flags().StringVarP(&zone, "zone", "z", "", "Pull Zone name (required)")
+	_ = dnsCheckCmd.MarkFlagRequired("key")
+	_ = dnsCheckCmd.MarkFlagRequired("zone")
+
+	// Setup flags for stats show command
+	statsShowCmd.Flags().StringVarP(&apiKey, "key", "k", "", "Bunny CDN API key (required)")
+	statsShowCmd.Flags().StringVarP(&zone, "zone", "z", "", "Pull Zone name (required)")
+	statsShowCmd.Flags().IntVar(&days, "days", 7, "Number of days to retrieve statistics for (1-30)")
+	statsShowCmd.Flags().BoolVar(&hourly, "hourly", false, "Show hourly breakdown instead of daily")
+	statsShowCmd.Flags().BoolVar(&detailed, "detailed", false, "Show detailed charts and geographic distribution")
+	_ = statsShowCmd.MarkFlagRequired("key")
+	_ = statsShowCmd.MarkFlagRequired("zone")
+
+	// Setup flags for minify command
+	minifyCmd.Flags().StringVar(&minifyCacheDir, "cache", ".minify-cache", "Cache directory for WebP conversions")
+	minifyCmd.Flags().BoolVar(&minifyForce, "force", false, "Force reprocessing of all files")
+	minifyCmd.Flags().StringSliceVar(&minifyExclude, "exclude", []string{"newsletter/**"}, "Glob patterns to exclude")
+}
+
+// Global check command
+var checkCmd = &cobra.Command{
+	Use:   "check",
+	Short: "Run all checks (rules, DNS, SSL) for a pull zone",
+	Run: func(cmd *cobra.Command, args []string) {
+		handleGeneralCheck()
+	},
+}
+
+// Rules command group
+var rulesCmd = &cobra.Command{
+	Use:   "rules",
+	Short: "Manage redirect rules",
+	Long:  "Manage redirect rules in Bunny CDN pull zones",
+}
+
+var rulesAddCmd = &cobra.Command{
+	Use:   "add",
+	Short: "Add a new 302 redirect",
+	Run: func(cmd *cobra.Command, args []string) {
+		handleAdd()
+	},
+}
+
+var rulesListCmd = &cobra.Command{
+	Use:   "list",
+	Short: "List all existing 302 redirects",
+	Run: func(cmd *cobra.Command, args []string) {
+		handleList()
+	},
+}
+
+var rulesCheckCmd = &cobra.Command{
+	Use:   "check",
+	Short: "Check redirect rules for potential issues",
+	Run: func(cmd *cobra.Command, args []string) {
+		handleCheck()
+	},
+}
+
+// CDN command group
+var cdnCmd = &cobra.Command{
+	Use:   "cdn",
+	Short: "Manage CDN content",
+	Long:  "Manage CDN content in Bunny CDN pull zones",
+}
+
+var cdnPushCmd = &cobra.Command{
+	Use:   "push",
+	Short: "Push files from local directory to CDN storage",
+	Run: func(cmd *cobra.Command, args []string) {
+		handleCDNPush()
+	},
+}
+
+var cdnCheckCmd = &cobra.Command{
+	Use:   "check",
+	Short: "Check SSL configuration for all pull zone hostnames",
+	Run: func(cmd *cobra.Command, args []string) {
+		handleCDNCheck()
+	},
+}
+
+// DNS command group
+var dnsCmd = &cobra.Command{
+	Use:   "dns",
+	Short: "Manage DNS records",
+	Long:  "Manage DNS records for Bunny CDN pull zones",
+}
+
+var dnsListCmd = &cobra.Command{
+	Use:   "list",
+	Short: "List DNS A and CNAME records for a pull zone",
+	Run: func(cmd *cobra.Command, args []string) {
+		handleDNSList()
+	},
+}
+
+var dnsCheckCmd = &cobra.Command{
+	Use:   "check",
+	Short: "Check DNS records exist for pull zone hostnames",
+	Run: func(cmd *cobra.Command, args []string) {
+		handleDNSCheck()
+	},
+}
+
+// Stats command group
+var statsCmd = &cobra.Command{
+	Use:   "stats",
+	Short: "View pull zone statistics",
+	Long:  "View pull zone statistics from Bunny CDN",
+}
+
+var statsShowCmd = &cobra.Command{
+	Use:   "show",
+	Short: "Show usage statistics for a pull zone",
+	Run: func(cmd *cobra.Command, args []string) {
+		handleStatsShow()
+	},
+}
+
+// Minify command
+var minifyCmd = &cobra.Command{
+	Use:   "minify <source> <target>",
+	Short: "Minify HTML/CSS/JS and optimize images to WebP",
+	Long: `Minify HTML, CSS, JavaScript, SVG, and XML files.
+Converts images to WebP with responsive srcset.
+Converts TTF fonts to WOFF2.
+Inlines critical CSS for faster page loads.`,
+	Args: cobra.ExactArgs(2),
+	Run: func(cmd *cobra.Command, args []string) {
+		handleMinify(args[0], args[1])
+	},
 }
 
 func handleCDNPush() {
@@ -112,20 +278,19 @@ func handleCDNPush() {
 	ctx := createDebugContext(baseCtx)
 
 	// Verify local directory exists
-	localDir := CLI.CDN.Push.From
 	if _, err := os.Stat(localDir); os.IsNotExist(err) {
 		log.Fatalf("Local directory '%s' does not exist", localDir)
 	}
 
 	// Look up pull zone by name
-	pullZoneID, err := findPullZoneByName(ctx, CLI.CDN.Push.Key, CLI.CDN.Push.Zone)
+	pullZoneID, err := findPullZoneByName(ctx, apiKey, zone)
 	if err != nil {
-		log.Fatalf("Error finding pull zone '%s': %v", CLI.CDN.Push.Zone, err)
+		log.Fatalf("Error finding pull zone '%s': %v", zone, err)
 	}
-	fmt.Printf("Found pull zone '%s' with ID: %d\n", CLI.CDN.Push.Zone, pullZoneID)
+	fmt.Printf("Found pull zone '%s' with ID: %d\n", zone, pullZoneID)
 
 	// Find associated storage zone
-	storageZone, err := getStorageZoneByPullZone(ctx, CLI.CDN.Push.Key, pullZoneID)
+	storageZone, err := getStorageZoneByPullZone(ctx, apiKey, pullZoneID)
 	if err != nil {
 		log.Fatalf("Error finding storage zone: %v", err)
 	}
@@ -185,42 +350,96 @@ func handleAdd() {
 	ctx := createDebugContext(baseCtx)
 
 	// Look up pull zone by name
-	id, err := findPullZoneByName(ctx, CLI.Rules.Add.Key, CLI.Rules.Add.Zone)
+	id, err := findPullZoneByName(ctx, apiKey, zone)
 	if err != nil {
-		log.Fatalf("Error finding pull zone '%s': %v", CLI.Rules.Add.Zone, err)
+		log.Fatalf("Error finding pull zone '%s': %v", zone, err)
 	}
 	zoneID := fmt.Sprintf("%d", id)
-	fmt.Printf("Found pull zone '%s' with ID: %s\n", CLI.Rules.Add.Zone, zoneID)
+	fmt.Printf("Found pull zone '%s' with ID: %s\n", zone, zoneID)
 
-	// Set default description if not provided
-	desc := CLI.Rules.Add.Desc
-	if desc == "" {
-		desc = fmt.Sprintf("302 redirect from %s to %s", CLI.Rules.Add.From, CLI.Rules.Add.To)
-	}
-
-	// Create the edge rule for 302 redirect using the Redirect action
-	rule := EdgeRule{
-		ActionType:          1,                // Redirect
-		ActionParameter1:    CLI.Rules.Add.To, // Destination URL
-		ActionParameter2:    "302",            // Status code
-		TriggerMatchingType: 0,                // MatchAny
-		Description:         desc,
-		Enabled:             true,
-		Triggers: []Trigger{
-			{
-				Type:                0, // Url trigger
-				PatternMatches:      []string{CLI.Rules.Add.From},
-				PatternMatchingType: 0, // MatchAny
-			},
-		},
-	}
-
-	err = addEdgeRule(ctx, CLI.Rules.Add.Key, zoneID, rule)
+	// Get existing rules to check for matching destination
+	existingRules, err := listEdgeRules(ctx, apiKey, zoneID)
 	if err != nil {
-		log.Fatalf("Error adding edge rule: %v", err)
+		log.Fatalf("Error listing existing rules: %v", err)
 	}
 
-	fmt.Printf("Successfully added 302 redirect from %s to %s\n", CLI.Rules.Add.From, CLI.Rules.Add.To)
+	// Search for existing rule with same destination
+	var matchingRule *EdgeRuleResponse
+	for i, rule := range existingRules {
+		if rule.ActionType == 1 && rule.ActionParameter1 == toURL && rule.ActionParameter2 == "302" {
+			matchingRule = &existingRules[i]
+			break
+		}
+	}
+
+	if matchingRule != nil {
+		// Check if pattern already exists
+		if len(matchingRule.Triggers) > 0 {
+			for _, pattern := range matchingRule.Triggers[0].PatternMatches {
+				if pattern == fromURL {
+					fmt.Printf("Pattern '%s' already exists in rule for destination '%s'\n", fromURL, toURL)
+					return
+				}
+			}
+		}
+
+		// Add new pattern to existing rule
+		newPatterns := append(matchingRule.Triggers[0].PatternMatches, fromURL)
+		rule := EdgeRule{
+			Guid:                matchingRule.Guid,
+			ActionType:          matchingRule.ActionType,
+			ActionParameter1:    matchingRule.ActionParameter1,
+			ActionParameter2:    matchingRule.ActionParameter2,
+			TriggerMatchingType: matchingRule.TriggerMatchingType,
+			Description:         matchingRule.Description,
+			Enabled:             matchingRule.Enabled,
+			Triggers: []Trigger{
+				{
+					Type:                matchingRule.Triggers[0].Type,
+					PatternMatches:      newPatterns,
+					PatternMatchingType: matchingRule.Triggers[0].PatternMatchingType,
+				},
+			},
+		}
+
+		err = addEdgeRule(ctx, apiKey, zoneID, rule)
+		if err != nil {
+			log.Fatalf("Error updating edge rule: %v", err)
+		}
+
+		fmt.Printf("Added pattern '%s' to existing rule for destination '%s'\n", fromURL, toURL)
+		fmt.Printf("Rule now has %d patterns\n", len(newPatterns))
+	} else {
+		// Set default description if not provided
+		desc := description
+		if desc == "" {
+			desc = fmt.Sprintf("302 redirect to %s", toURL)
+		}
+
+		// Create new edge rule for 302 redirect
+		rule := EdgeRule{
+			ActionType:          1,     // Redirect
+			ActionParameter1:    toURL, // Destination URL
+			ActionParameter2:    "302", // Status code
+			TriggerMatchingType: 0,     // MatchAny
+			Description:         desc,
+			Enabled:             true,
+			Triggers: []Trigger{
+				{
+					Type:                0, // Url trigger
+					PatternMatches:      []string{fromURL},
+					PatternMatchingType: 0, // MatchAny
+				},
+			},
+		}
+
+		err = addEdgeRule(ctx, apiKey, zoneID, rule)
+		if err != nil {
+			log.Fatalf("Error adding edge rule: %v", err)
+		}
+
+		fmt.Printf("Created new 302 redirect from '%s' to '%s'\n", fromURL, toURL)
+	}
 }
 
 func handleList() {
@@ -230,15 +449,15 @@ func handleList() {
 	ctx := createDebugContext(baseCtx)
 
 	// Look up pull zone by name
-	id, err := findPullZoneByName(ctx, CLI.Rules.List.Key, CLI.Rules.List.Zone)
+	id, err := findPullZoneByName(ctx, apiKey, zone)
 	if err != nil {
-		log.Fatalf("Error finding pull zone '%s': %v", CLI.Rules.List.Zone, err)
+		log.Fatalf("Error finding pull zone '%s': %v", zone, err)
 	}
 	zoneID := fmt.Sprintf("%d", id)
-	fmt.Printf("Found pull zone '%s' with ID: %s\n", CLI.Rules.List.Zone, zoneID)
+	fmt.Printf("Found pull zone '%s' with ID: %s\n", zone, zoneID)
 
 	// Get all edge rules
-	rules, err := listEdgeRules(ctx, CLI.Rules.List.Key, zoneID)
+	rules, err := listEdgeRules(ctx, apiKey, zoneID)
 	if err != nil {
 		log.Fatalf("Error listing edge rules: %v", err)
 	}
@@ -267,9 +486,17 @@ func handleList() {
 		fmt.Printf("\n%d. %s\n", i+1, redirect.Description)
 		fmt.Printf("   Status: %s\n", map[bool]string{true: "Enabled", false: "Disabled"}[redirect.Enabled])
 
-		// Extract source URL from triggers
+		// Extract all source URLs from triggers
 		if len(redirect.Triggers) > 0 && len(redirect.Triggers[0].PatternMatches) > 0 {
-			fmt.Printf("   From: %s\n", redirect.Triggers[0].PatternMatches[0])
+			patterns := redirect.Triggers[0].PatternMatches
+			if len(patterns) == 1 {
+				fmt.Printf("   From: %s\n", patterns[0])
+			} else {
+				fmt.Printf("   From: (%d patterns)\n", len(patterns))
+				for _, pattern := range patterns {
+					fmt.Printf("     - %s\n", pattern)
+				}
+			}
 		}
 
 		fmt.Printf("   To: %s\n", redirect.ActionParameter1)
@@ -284,15 +511,15 @@ func handleCheck() {
 	ctx := createDebugContext(baseCtx)
 
 	// Look up pull zone by name
-	id, err := findPullZoneByName(ctx, CLI.Rules.Check.Key, CLI.Rules.Check.Zone)
+	id, err := findPullZoneByName(ctx, apiKey, zone)
 	if err != nil {
-		log.Fatalf("Error finding pull zone '%s': %v", CLI.Rules.Check.Zone, err)
+		log.Fatalf("Error finding pull zone '%s': %v", zone, err)
 	}
 	zoneID := fmt.Sprintf("%d", id)
-	fmt.Printf("Found pull zone '%s' with ID: %s\n", CLI.Rules.Check.Zone, zoneID)
+	fmt.Printf("Found pull zone '%s' with ID: %s\n", zone, zoneID)
 
 	// Check rules using structured function
-	result, err := checkRulesStructured(ctx, CLI.Rules.Check.Key, zoneID, CLI.Rules.Check.SkipHealth)
+	result, err := checkRulesStructured(ctx, apiKey, zoneID, skipHealth)
 	if err != nil {
 		log.Fatalf("Error checking rules: %v", err)
 	}
@@ -341,7 +568,7 @@ func handleDNSList() {
 	ctx := createDebugContext(baseCtx)
 
 	// Setup DNS command (shared logic)
-	pullZoneDetails, err := setupDNSCommand(ctx, CLI.DNS.List.Key, CLI.DNS.List.Zone)
+	pullZoneDetails, err := setupDNSCommand(ctx, apiKey, zone)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -351,7 +578,7 @@ func handleDNSList() {
 	}
 
 	// Get all DNS zones and search for matching records
-	dnsRecords, err := findDNSRecordsForHostnames(ctx, CLI.DNS.List.Key, pullZoneDetails.Hostnames)
+	dnsRecords, err := findDNSRecordsForHostnames(ctx, apiKey, pullZoneDetails.Hostnames)
 	if err != nil {
 		log.Fatalf("Error finding DNS records: %v", err)
 	}
@@ -379,14 +606,14 @@ func handleCDNCheck() {
 	ctx := createDebugContext(baseCtx)
 
 	// Look up pull zone by name
-	pullZoneID, err := findPullZoneByName(ctx, CLI.CDN.Check.Key, CLI.CDN.Check.Zone)
+	pullZoneID, err := findPullZoneByName(ctx, apiKey, zone)
 	if err != nil {
-		log.Fatalf("Error finding pull zone '%s': %v", CLI.CDN.Check.Zone, err)
+		log.Fatalf("Error finding pull zone '%s': %v", zone, err)
 	}
-	fmt.Printf("Found pull zone '%s' with ID: %d\n", CLI.CDN.Check.Zone, pullZoneID)
+	fmt.Printf("Found pull zone '%s' with ID: %d\n", zone, pullZoneID)
 
 	// Get pull zone details to check SSL configuration
-	pullZoneDetails, err := getPullZoneDetails(ctx, CLI.CDN.Check.Key, fmt.Sprintf("%d", pullZoneID))
+	pullZoneDetails, err := getPullZoneDetails(ctx, apiKey, fmt.Sprintf("%d", pullZoneID))
 	if err != nil {
 		log.Fatalf("Error getting pull zone details: %v", err)
 	}
@@ -422,7 +649,7 @@ func handleDNSCheck() {
 	ctx := createDebugContext(baseCtx)
 
 	// Setup DNS command (shared logic)
-	pullZoneDetails, err := setupDNSCommand(ctx, CLI.DNS.Check.Key, CLI.DNS.Check.Zone)
+	pullZoneDetails, err := setupDNSCommand(ctx, apiKey, zone)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -432,7 +659,7 @@ func handleDNSCheck() {
 	}
 
 	// Check DNS records using structured function
-	result := checkDNSRecordsStructured(ctx, CLI.DNS.Check.Key, pullZoneDetails.Hostnames)
+	result := checkDNSRecordsStructured(ctx, apiKey, pullZoneDetails.Hostnames)
 
 	// Display results
 	for _, success := range result.Successful {
@@ -461,19 +688,19 @@ func handleGeneralCheck() {
 
 	ctx := createDebugContext(baseCtx)
 
-	fmt.Printf("Running comprehensive checks for pull zone '%s'...\n", CLI.Check.Zone)
+	fmt.Printf("Running comprehensive checks for pull zone '%s'...\n", zone)
 	fmt.Println("=" + strings.Repeat("=", 60))
 
 	// Look up pull zone by name (shared by all checks)
-	pullZoneID, err := findPullZoneByName(ctx, CLI.Check.Key, CLI.Check.Zone)
+	pullZoneID, err := findPullZoneByName(ctx, apiKey, zone)
 	if err != nil {
-		log.Fatalf("Error finding pull zone '%s': %v", CLI.Check.Zone, err)
+		log.Fatalf("Error finding pull zone '%s': %v", zone, err)
 	}
 	zoneID := fmt.Sprintf("%d", pullZoneID)
-	fmt.Printf("Found pull zone '%s' with ID: %s\n", CLI.Check.Zone, zoneID)
+	fmt.Printf("Found pull zone '%s' with ID: %s\n", zone, zoneID)
 
 	// Get pull zone details (needed for DNS and SSL checks)
-	pullZoneDetails, err := getPullZoneDetails(ctx, CLI.Check.Key, zoneID)
+	pullZoneDetails, err := getPullZoneDetails(ctx, apiKey, zoneID)
 	if err != nil {
 		log.Fatalf("Error getting pull zone details: %v", err)
 	}
@@ -484,7 +711,7 @@ func handleGeneralCheck() {
 	fmt.Printf("\nRULES CHECK\n")
 	fmt.Println(strings.Repeat("-", 40))
 
-	rulesResult, err := checkRulesStructured(ctx, CLI.Check.Key, zoneID, CLI.Check.SkipHealth)
+	rulesResult, err := checkRulesStructured(ctx, apiKey, zoneID, skipHealth)
 	if err != nil {
 		fmt.Printf("ERROR: Failed to check rules: %v\n", err)
 		hasErrors = true
@@ -509,7 +736,7 @@ func handleGeneralCheck() {
 	if len(pullZoneDetails.Hostnames) == 0 {
 		fmt.Println("No hostnames found for this pull zone.")
 	} else {
-		dnsResult := checkDNSRecordsStructured(ctx, CLI.Check.Key, pullZoneDetails.Hostnames)
+		dnsResult := checkDNSRecordsStructured(ctx, apiKey, pullZoneDetails.Hostnames)
 
 		// Display DNS results
 		for _, success := range dnsResult.Successful {
@@ -561,5 +788,84 @@ func handleGeneralCheck() {
 		os.Exit(1)
 	} else {
 		fmt.Printf("OVERALL RESULT: All checks passed successfully\n")
+	}
+}
+
+func handleStatsShow() {
+	baseCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	ctx := createDebugContext(baseCtx)
+
+	// Validate days parameter
+	if days < 1 || days > 30 {
+		log.Fatalf("Days must be between 1 and 30, got: %d", days)
+	}
+
+	// Look up pull zone by name
+	pullZoneID, err := findPullZoneByName(ctx, apiKey, zone)
+	if err != nil {
+		log.Fatalf("Error finding pull zone '%s': %v", zone, err)
+	}
+	fmt.Printf("Found pull zone '%s' with ID: %d\n", zone, pullZoneID)
+
+	// Set date range
+	dateTo := time.Now()
+	dateFrom := dateTo.AddDate(0, 0, -days)
+
+	// Configure statistics parameters
+	params := StatisticsParams{
+		DateFrom:                          dateFrom,
+		DateTo:                            dateTo,
+		PullZoneID:                        pullZoneID,
+		Hourly:                            hourly,
+		LoadBandwidthUsed:                 true,
+		LoadRequestsServed:                true,
+		LoadGeographicTrafficDistribution: detailed,
+	}
+
+	// Fetch statistics
+	stats, err := getStatistics(ctx, apiKey, params)
+	if err != nil {
+		log.Fatalf("Error fetching statistics: %v", err)
+	}
+
+	// Display results
+	fmt.Printf("\n")
+	fmt.Printf("STATISTICS FOR PULL ZONE: %s\n", zone)
+	fmt.Printf("Date Range: %s to %s (%d days)\n",
+		dateFrom.Format("2006-01-02"),
+		dateTo.Format("2006-01-02"),
+		days)
+	fmt.Printf("Granularity: %s\n", map[bool]string{true: "Hourly", false: "Daily"}[hourly])
+	fmt.Println(strings.Repeat("=", 70))
+
+	// Show summary
+	displayStatisticsSummary(stats)
+
+	// Show detailed information if requested
+	if detailed {
+		if len(stats.BandwidthUsedChart) > 0 {
+			displayBandwidthChart(stats.BandwidthUsedChart, "Bandwidth Usage Over Time")
+		}
+
+		if len(stats.RequestsServedChart) > 0 {
+			displayRequestsChart(stats.RequestsServedChart, "Requests Served Over Time")
+		}
+
+		if len(stats.GeoTrafficDistribution) > 0 {
+			displayGeographicDistribution(stats.GeoTrafficDistribution)
+		}
+	}
+}
+
+func handleMinify(source, target string) {
+	// Verify source directory exists
+	if _, err := os.Stat(source); os.IsNotExist(err) {
+		log.Fatalf("Source directory '%s' does not exist", source)
+	}
+
+	if err := minifyCommand(source, target, minifyCacheDir, minifyForce, minifyExclude); err != nil {
+		log.Fatalf("Minify failed: %v", err)
 	}
 }

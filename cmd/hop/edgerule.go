@@ -414,7 +414,7 @@ func checkRedirectLoops(redirectMap *RedirectMap) []CheckIssue {
 		// Follow the redirect chain
 		for {
 			chainLength++
-			if chainLength > 10 {
+			if chainLength >= 10 {
 				issues = append(issues, CheckIssue{
 					Type:     "redirect_chain",
 					Severity: "error",
@@ -618,9 +618,17 @@ func displayIssueGroup(title string, issues []CheckIssue) {
 			fmt.Printf("    GUID: %s\n", issue.Rule.Guid)
 			fmt.Printf("    Status: %s\n", map[bool]string{true: "Enabled", false: "Disabled"}[issue.Rule.Enabled])
 
-			source := extractSourceURL(*issue.Rule)
-			if source != "" {
-				fmt.Printf("    From: %s\n", source)
+			// Display all source patterns
+			if len(issue.Rule.Triggers) > 0 && len(issue.Rule.Triggers[0].PatternMatches) > 0 {
+				patterns := issue.Rule.Triggers[0].PatternMatches
+				if len(patterns) == 1 {
+					fmt.Printf("    From: %s\n", patterns[0])
+				} else {
+					fmt.Printf("    From: (%d patterns)\n", len(patterns))
+					for _, pattern := range patterns {
+						fmt.Printf("      - %s\n", pattern)
+					}
+				}
 			}
 			if issue.Rule.ActionParameter1 != "" {
 				fmt.Printf("    To: %s\n", issue.Rule.ActionParameter1)

@@ -287,7 +287,7 @@ func skipChecker(localStates map[string]*LocalFileState, remoteFiles <-chan Remo
 			localState.Reason = reason
 
 			results <- FileUploadStatus{
-				Path:    localState.File.Path,
+				Path:    localState.File.RelPath,
 				Success: true,
 				Skipped: true,
 				Reason:  reason,
@@ -413,14 +413,13 @@ func uploadDirectoryOptimized(ctx context.Context, storageZone *StorageZone, loc
 
 			if result.Success {
 				if result.Skipped {
-					fmt.Printf("⏭ Skipped: %s (%s)\n", filepath.Base(result.Path), result.Reason)
 					skipped++
 				} else {
-					fmt.Printf("✓ Uploaded: %s\n", filepath.Base(result.Path))
+					fmt.Printf("✓ Uploaded: %s\n", result.Path)
 					uploaded++
 				}
 			} else {
-				fmt.Printf("✗ Failed: %s (%v)\n", filepath.Base(result.Path), result.Error)
+				fmt.Printf("✗ Failed: %s (%v)\n", result.Path, result.Error)
 				failed++
 			}
 		}
@@ -457,7 +456,7 @@ func uploader(ctx context.Context, storageZone *StorageZone, uploadTasks <-chan 
 			err := uploadFileToStorage(ctx, storageZone, task.LocalFile.Path, task.RemotePath)
 
 			results <- FileUploadStatus{
-				Path:    task.LocalFile.Path,
+				Path:    task.LocalFile.RelPath,
 				Success: err == nil,
 				Error:   err,
 			}

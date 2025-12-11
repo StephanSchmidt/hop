@@ -234,7 +234,6 @@ func getJSONFieldNames(t reflect.Type) []string {
 	return fields
 }
 
-
 // formatBoolStatus formats a boolean as a human-readable status
 func formatBoolStatus(enabled bool) string {
 	if enabled {

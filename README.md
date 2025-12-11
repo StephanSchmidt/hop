@@ -6,7 +6,9 @@ A Go command-line tool to use [Bunny CDN](https://bunny.net) for static sites
 
 * Manage 302 redirects
 * Upload files to CDN storage
+* Minify HTML/CSS/JS and optimize images to WebP
 * List DNS A and CNAME records for pull zones
+* View pull zone usage statistics
 
 ## Installation
 
@@ -63,6 +65,18 @@ hop cdn push --key YOUR_API_KEY --zone PULL_ZONE_NAME --from LOCAL_DIRECTORY
 hop cdn check --key YOUR_API_KEY --zone PULL_ZONE_NAME
 ```
 
+### Minify and Optimize
+```bash
+# Minify HTML/CSS/JS and convert images to WebP
+hop minify SOURCE_DIR TARGET_DIR
+
+# Force reprocessing of all files (ignore cache)
+hop minify SOURCE_DIR TARGET_DIR --force
+
+# Exclude specific paths
+hop minify SOURCE_DIR TARGET_DIR --exclude "drafts/**" --exclude "private/**"
+```
+
 ### DNS Records Management
 ```bash
 # List DNS A and CNAME records for pull zone
@@ -70,6 +84,18 @@ hop dns list --key YOUR_API_KEY --zone PULL_ZONE_NAME
 
 # Check DNS records exist for pull zone hostnames
 hop dns check --key YOUR_API_KEY --zone PULL_ZONE_NAME
+```
+
+### Statistics and Analytics
+```bash
+# View pull zone usage statistics (default: last 7 days)
+hop stats show --key YOUR_API_KEY --zone PULL_ZONE_NAME
+
+# View hourly breakdown for last 3 days
+hop stats show --key YOUR_API_KEY --zone PULL_ZONE_NAME --days 3 --hourly
+
+# View detailed statistics with charts and geographic distribution
+hop stats show --key YOUR_API_KEY --zone PULL_ZONE_NAME --detailed
 ```
 
 ## Commands
@@ -144,6 +170,31 @@ hop dns check --key YOUR_API_KEY --zone PULL_ZONE_NAME
 - Warns if HTTPS works but Force SSL redirect is not configured
 - Uses text indicators: OK, WARN, ERROR (no emojis)
 
+### `minify` - Minify HTML/CSS/JS and optimize images
+
+**Required Arguments:**
+- `<source>`: Source directory containing files to process
+- `<target>`: Target directory for output (will be cleaned on each run)
+
+**Optional Parameters:**
+- `--cache`: Cache directory for WebP conversions (default: `.minify-cache`)
+- `--force`: Force reprocessing of all files, ignoring cache
+- `--exclude`: Glob patterns to exclude (default: `newsletter/**`). Can be specified multiple times.
+
+**What it does:**
+- Minifies HTML, CSS, JavaScript, SVG, and XML files
+- Converts PNG/JPG images to WebP format with quality optimization
+- Generates responsive image variants with srcset
+- Converts TTF fonts to WOFF2 format
+- Uses persistent cache to skip unchanged images (based on content hash)
+- Parallel processing for faster builds
+
+**Notes:**
+- The target directory is completely replaced on each run
+- Image processing is cached in `.minify-cache/` by default (add to .gitignore)
+- Uses content hashing to detect changes - only reprocesses modified files
+- Ideal for static site generators: run before `cdn push`
+
 ### `dns list` - List DNS A and CNAME records for pull zone
 
 **Required Parameters:**
@@ -168,6 +219,26 @@ hop dns check --key YOUR_API_KEY --zone PULL_ZONE_NAME
 - Uses text indicators: `OK` for found records, `MISSING` for missing records, `SKIP` for ignored hostnames
 - Exits with status code 1 if any required DNS records are missing
 - Use `--debug` flag for detailed hostname matching information
+
+### `stats show` - Show usage statistics for a pull zone
+
+**Required Parameters:**
+- `--key`: Your Bunny CDN API key
+- `--zone`: The Pull Zone name (e.g., "amazingctosite") - will show statistics for this pull zone
+
+**Optional Parameters:**
+- `--days`: Number of days to retrieve statistics for (1-30, default: 7)
+- `--hourly`: Show hourly breakdown instead of daily aggregation
+- `--detailed`: Show detailed charts and geographic distribution data
+
+**Notes:**
+- Shows total bandwidth used, requests served, and cache hit rate
+- By default shows summary statistics for the last 7 days
+- With `--detailed` flag, displays bandwidth/requests charts over time and geographic traffic distribution
+- With `--hourly` flag, breaks down data by hour instead of by day
+- Shows top 5 countries by bandwidth usage in summary view
+- All bandwidth values are displayed in human-readable format (B, KB, MB, GB, TB)
+- Request counts are formatted with comma separators for readability
 
 ## Global Options
 
@@ -253,6 +324,41 @@ hop dns list --key your-api-key --zone amazingctosite
 hop dns check --key your-api-key --zone amazingctosite
 ```
 
+### View pull zone statistics
+```bash
+hop stats show --key your-api-key --zone amazingctosite
+```
+
+### View statistics for last 14 days with hourly breakdown
+```bash
+hop stats show --key your-api-key --zone amazingctosite --days 14 --hourly
+```
+
+### View detailed statistics with charts and geographic data
+```bash
+hop stats show --key your-api-key --zone amazingctosite --detailed
+```
+
+### Minify and optimize a static site
+```bash
+hop minify ./site ./dist
+```
+
+### Force full rebuild (ignore cache)
+```bash
+hop minify ./site ./dist --force
+```
+
+### Exclude specific directories from minification
+```bash
+hop minify ./site ./dist --exclude "drafts/**" --exclude "assets/raw/**"
+```
+
+### Full static site deployment workflow
+```bash
+hop minify ./site ./dist && hop cdn push --key your-api-key --zone amazingctosite --from ./dist
+```
+
 ### Debug any command (add --debug before command)
 ```bash
 hop --debug check --key your-api-key --zone amazingctosite
@@ -261,6 +367,8 @@ hop --debug dns check --key your-api-key --zone amazingctosite
 hop --debug rules check --key your-api-key --zone amazingctosite
 hop --debug cdn push --key your-api-key --zone amazingctosite --from ./dist
 hop --debug cdn check --key your-api-key --zone amazingctosite
+hop --debug stats show --key your-api-key --zone amazingctosite
+hop --debug minify ./site ./dist
 ```
 
 ## Building
