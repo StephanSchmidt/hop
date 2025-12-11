@@ -6,7 +6,7 @@ require (
 	github.com/golangci/golangci-lint v1.62.2
 	github.com/kolesa-team/go-webp v1.0.5
 	github.com/securego/gosec/v2 v2.21.4
-	github.com/spf13/cobra v1.8.1
+	github.com/spf13/cobra v1.10.2
 	github.com/tdewolff/font v0.0.0-20250902141222-fb72ecc1bc0a
 	github.com/tdewolff/minify/v2 v2.24.8
 	go.uber.org/nilaway v0.0.0-20250821055425-361559d802f0
@@ -178,7 +178,7 @@ require (
 	github.com/spf13/afero v1.11.0 // indirect
 	github.com/spf13/cast v1.5.0 // indirect
 	github.com/spf13/jwalterweatherman v1.1.0 // indirect
-	github.com/spf13/pflag v1.0.5 // indirect
+	github.com/spf13/pflag v1.0.10 // indirect
 	github.com/spf13/viper v1.12.0 // indirect
 	github.com/ssgreg/nlreturn/v2 v2.2.1 // indirect
 	github.com/stbenjam/no-sprintf-host-port v0.1.1 // indirect
