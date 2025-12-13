@@ -281,12 +281,19 @@ func (m *Minifier) processImage(srcPath string) error {
 		return info.Sizes[i].Width > info.Sizes[j].Width
 	})
 
+	// Copy original PNG/JPG as fallback for meta tags (og:image, etc.)
+	// These don't get rewritten like <img> tags do
+	originalTargetPath := filepath.Join(m.config.Target, relPath)
+	if err := copyFile(srcPath, originalTargetPath); err != nil {
+		return fmt.Errorf("failed to copy original image %s: %w", relPath, err)
+	}
+
 	// Store in map
 	m.imageMapMu.Lock()
 	m.imageMap[relPath] = info
 	m.imageMapMu.Unlock()
 
-	fmt.Printf("  [IMG] %s → %d sizes\n", relPath, len(info.Sizes))
+	fmt.Printf("  [IMG] %s → %d sizes + original\n", relPath, len(info.Sizes))
 	return nil
 }
 

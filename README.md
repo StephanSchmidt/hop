@@ -9,6 +9,7 @@ A Go command-line tool to use [Bunny CDN](https://bunny.net) for static sites
 * Minify HTML/CSS/JS and optimize images to WebP
 * List DNS A and CNAME records for pull zones
 * View pull zone usage statistics
+* Check and fix security headers (HSTS, X-Frame-Options, etc.)
 
 ## Installation
 
@@ -96,6 +97,15 @@ hop stats show --key YOUR_API_KEY --zone PULL_ZONE_NAME --days 3 --hourly
 
 # View detailed statistics with charts and geographic distribution
 hop stats show --key YOUR_API_KEY --zone PULL_ZONE_NAME --detailed
+```
+
+### Security Headers
+```bash
+# Check which security headers are configured
+hop security check --key YOUR_API_KEY --zone PULL_ZONE_NAME
+
+# Add missing security headers as edge rules
+hop security fix --key YOUR_API_KEY --zone PULL_ZONE_NAME
 ```
 
 ## Commands
@@ -240,6 +250,46 @@ hop stats show --key YOUR_API_KEY --zone PULL_ZONE_NAME --detailed
 - All bandwidth values are displayed in human-readable format (B, KB, MB, GB, TB)
 - Request counts are formatted with comma separators for readability
 
+### `security check` - Check security headers configuration
+
+**Required Parameters:**
+- `--key`: Your Bunny CDN API key
+- `--zone`: The Pull Zone name (e.g., "amazingctosite") - will check edge rules for security headers
+
+**What it checks:**
+- Strict-Transport-Security (HSTS) - Forces HTTPS connections
+- X-Frame-Options - Prevents clickjacking
+- X-Content-Type-Options - Prevents MIME sniffing
+- Referrer-Policy - Controls referrer information
+- X-XSS-Protection - Disables legacy XSS filter
+- Permissions-Policy - Restricts browser features
+- Cross-Origin-Opener-Policy - Isolates browsing context
+- Cross-Origin-Embedder-Policy - Blocks cross-origin resources
+- Cross-Origin-Resource-Policy - Limits resource loading
+
+**Notes:**
+- Critical headers (HSTS, X-Frame-Options, X-Content-Type-Options) show as ERROR if missing
+- Other headers show as WARN if missing
+- Exits with status code 1 if any critical headers are missing
+- Does NOT check dangerous headers like HPKP (certificate pinning) or CSP (site-specific)
+
+### `security fix` - Add missing security headers as edge rules
+
+**Required Parameters:**
+- `--key`: Your Bunny CDN API key
+- `--zone`: The Pull Zone name (e.g., "amazingctosite") - will add edge rules for missing security headers
+
+**What it does:**
+- Creates edge rules for each missing security header
+- Uses recommended values from OWASP guidelines
+- Skips headers that are already configured
+- Applies headers to all URLs (using `*` pattern)
+
+**Notes:**
+- Only adds safe headers - excludes HPKP (can brick sites), CSP (site-specific), and Expect-CT (deprecated)
+- Does not modify existing header configurations
+- Each header is added as a separate edge rule for easy management
+
 ## Global Options
 
 The following options can be used with any command:
@@ -359,15 +409,27 @@ hop minify ./site ./dist --exclude "drafts/**" --exclude "assets/raw/**"
 hop minify ./site ./dist && hop cdn push --key your-api-key --zone amazingctosite --from ./dist
 ```
 
+### Check security headers
+```bash
+hop security check --key your-api-key --zone amazingctosite
+```
+
+### Fix missing security headers
+```bash
+hop security fix --key your-api-key --zone amazingctosite
+```
+
 ### Debug any command (add --debug before command)
 ```bash
 hop --debug check --key your-api-key --zone amazingctosite
 hop --debug dns list --key your-api-key --zone amazingctosite
-hop --debug dns check --key your-api-key --zone amazingctosite  
+hop --debug dns check --key your-api-key --zone amazingctosite
 hop --debug rules check --key your-api-key --zone amazingctosite
 hop --debug cdn push --key your-api-key --zone amazingctosite --from ./dist
 hop --debug cdn check --key your-api-key --zone amazingctosite
 hop --debug stats show --key your-api-key --zone amazingctosite
+hop --debug security check --key your-api-key --zone amazingctosite
+hop --debug security fix --key your-api-key --zone amazingctosite
 hop --debug minify ./site ./dist
 ```
 

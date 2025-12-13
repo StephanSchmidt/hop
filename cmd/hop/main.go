@@ -67,6 +67,7 @@ func init() {
 	rootCmd.AddCommand(dnsCmd)
 	rootCmd.AddCommand(statsCmd)
 	rootCmd.AddCommand(minifyCmd)
+	rootCmd.AddCommand(securityCmd)
 
 	// Setup rules subcommands
 	rulesCmd.AddCommand(rulesAddCmd)
@@ -83,6 +84,10 @@ func init() {
 
 	// Setup stats subcommands
 	statsCmd.AddCommand(statsShowCmd)
+
+	// Setup security subcommands
+	securityCmd.AddCommand(securityCheckCmd)
+	securityCmd.AddCommand(securityFixCmd)
 
 	// Setup flags for check command
 	checkCmd.Flags().StringVarP(&apiKey, "key", "k", "", "Bunny CDN API key (required)")
@@ -154,6 +159,18 @@ func init() {
 	minifyCmd.Flags().StringVar(&minifyCacheDir, "cache", ".minify-cache", "Cache directory for WebP conversions")
 	minifyCmd.Flags().BoolVar(&minifyForce, "force", false, "Force reprocessing of all files")
 	minifyCmd.Flags().StringSliceVar(&minifyExclude, "exclude", []string{"newsletter/**"}, "Glob patterns to exclude")
+
+	// Setup flags for security check command
+	securityCheckCmd.Flags().StringVarP(&apiKey, "key", "k", "", "Bunny CDN API key (required)")
+	securityCheckCmd.Flags().StringVarP(&zone, "zone", "z", "", "Pull Zone name (required)")
+	_ = securityCheckCmd.MarkFlagRequired("key")
+	_ = securityCheckCmd.MarkFlagRequired("zone")
+
+	// Setup flags for security fix command
+	securityFixCmd.Flags().StringVarP(&apiKey, "key", "k", "", "Bunny CDN API key (required)")
+	securityFixCmd.Flags().StringVarP(&zone, "zone", "z", "", "Pull Zone name (required)")
+	_ = securityFixCmd.MarkFlagRequired("key")
+	_ = securityFixCmd.MarkFlagRequired("zone")
 }
 
 // Global check command
@@ -268,6 +285,29 @@ Inlines critical CSS for faster page loads.`,
 	Args: cobra.ExactArgs(2),
 	Run: func(cmd *cobra.Command, args []string) {
 		handleMinify(args[0], args[1])
+	},
+}
+
+// Security command group
+var securityCmd = &cobra.Command{
+	Use:   "security",
+	Short: "Check security headers configuration",
+	Long:  "Check that recommended security HTTP headers are configured as edge rules",
+}
+
+var securityCheckCmd = &cobra.Command{
+	Use:   "check",
+	Short: "Check security headers are configured as edge rules",
+	Run: func(cmd *cobra.Command, args []string) {
+		handleSecurityCheck()
+	},
+}
+
+var securityFixCmd = &cobra.Command{
+	Use:   "fix",
+	Short: "Add missing security headers as edge rules",
+	Run: func(cmd *cobra.Command, args []string) {
+		handleSecurityFix()
 	},
 }
 
@@ -867,5 +907,57 @@ func handleMinify(source, target string) {
 
 	if err := minifyCommand(source, target, minifyCacheDir, minifyForce, minifyExclude); err != nil {
 		log.Fatalf("Minify failed: %v", err)
+	}
+}
+
+func handleSecurityCheck() {
+	baseCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	ctx := createDebugContext(baseCtx)
+
+	// Look up pull zone by name
+	id, err := findPullZoneByName(ctx, apiKey, zone)
+	if err != nil {
+		log.Fatalf("Error finding pull zone '%s': %v", zone, err)
+	}
+	zoneID := fmt.Sprintf("%d", id)
+	fmt.Printf("Found pull zone '%s' with ID: %s\n", zone, zoneID)
+
+	// Check security headers
+	result, err := checkSecurityHeaders(ctx, apiKey, zoneID)
+	if err != nil {
+		log.Fatalf("Error checking security headers: %v", err)
+	}
+
+	// Display results
+	displaySecurityResults(result)
+
+	// Exit with error if any critical headers are missing
+	for _, issue := range result.Issues {
+		if issue.Severity == "error" {
+			os.Exit(1)
+		}
+	}
+}
+
+func handleSecurityFix() {
+	baseCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	ctx := createDebugContext(baseCtx)
+
+	// Look up pull zone by name
+	id, err := findPullZoneByName(ctx, apiKey, zone)
+	if err != nil {
+		log.Fatalf("Error finding pull zone '%s': %v", zone, err)
+	}
+	zoneID := fmt.Sprintf("%d", id)
+	fmt.Printf("Found pull zone '%s' with ID: %s\n", zone, zoneID)
+
+	// Fix missing security headers
+	err = fixSecurityHeaders(ctx, apiKey, zoneID)
+	if err != nil {
+		log.Fatalf("Error fixing security headers: %v", err)
 	}
 }

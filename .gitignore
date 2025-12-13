@@ -1,5 +1,14 @@
+# Binaries
 /hop
-.claude/
+/bunny
+
+# Cache and generated
 .minify-cache/
+
+# Claude Code
+.claude/
+
+# Experimental rewrites
+rhop/
 plan_rust.md
 zig_plan.md
