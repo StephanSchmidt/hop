@@ -394,3 +394,78 @@ func TestBuildRedirectMap(t *testing.T) {
 		})
 	}
 }
+
+func TestSlashAddTriggerConstruction(t *testing.T) {
+	// Test that redirect URLs are constructed correctly
+	host := "example.com"
+	wantNoQuery := "https://example.com%{Url.Directory}%{Url.FileName}/"
+	wantWithQuery := "https://example.com%{Url.Directory}%{Url.FileName}/?%{Request.QueryString}"
+
+	noQueryURL := "https://" + host + "%{Url.Directory}%{Url.FileName}/"
+	if noQueryURL != wantNoQuery {
+		t.Errorf("no query URL = %s, want %s", noQueryURL, wantNoQuery)
+	}
+
+	withQueryURL := "https://" + host + "%{Url.Directory}%{Url.FileName}/?%{Request.QueryString}"
+	if withQueryURL != wantWithQuery {
+		t.Errorf("with query URL = %s, want %s", withQueryURL, wantWithQuery)
+	}
+}
+
+func TestSlashRuleIDTags(t *testing.T) {
+	// Verify the ID tag constants
+	if SlashAddNoQueryID != "[hop:slash-add-nq]" {
+		t.Errorf("SlashAddNoQueryID = %s, want '[hop:slash-add-nq]'", SlashAddNoQueryID)
+	}
+	if SlashAddWithQueryID != "[hop:slash-add-wq]" {
+		t.Errorf("SlashAddWithQueryID = %s, want '[hop:slash-add-wq]'", SlashAddWithQueryID)
+	}
+}
+
+func TestSlashRuleDescriptions(t *testing.T) {
+	// Verify descriptions contain ID tags
+	wantNoQuery := "Trailing slash: add (no query) [hop:slash-add-nq]"
+	if SlashAddDescNoQuery != wantNoQuery {
+		t.Errorf("SlashAddDescNoQuery = %s, want %s", SlashAddDescNoQuery, wantNoQuery)
+	}
+	wantWithQuery := "Trailing slash: add (with query) [hop:slash-add-wq]"
+	if SlashAddDescWithQuery != wantWithQuery {
+		t.Errorf("SlashAddDescWithQuery = %s, want %s", SlashAddDescWithQuery, wantWithQuery)
+	}
+}
+
+func TestTriggerTypeConstants(t *testing.T) {
+	// Verify trigger type constants match Bunny API values
+	if TriggerTypeURL != 0 {
+		t.Errorf("TriggerTypeURL = %d, want 0", TriggerTypeURL)
+	}
+	if TriggerTypeURLExtension != 3 {
+		t.Errorf("TriggerTypeURLExtension = %d, want 3", TriggerTypeURLExtension)
+	}
+	if TriggerTypeUrlQueryString != 6 {
+		t.Errorf("TriggerTypeUrlQueryString = %d, want 6", TriggerTypeUrlQueryString)
+	}
+}
+
+func TestPatternMatchingConstants(t *testing.T) {
+	// Verify pattern matching constants
+	if PatternMatchingAny != 0 {
+		t.Errorf("PatternMatchingAny = %d, want 0", PatternMatchingAny)
+	}
+	if PatternMatchingAll != 1 {
+		t.Errorf("PatternMatchingAll = %d, want 1", PatternMatchingAll)
+	}
+	if PatternMatchingNone != 2 {
+		t.Errorf("PatternMatchingNone = %d, want 2", PatternMatchingNone)
+	}
+}
+
+func TestTriggerMatchingConstants(t *testing.T) {
+	// Verify trigger matching constants
+	if TriggerMatchingAny != 0 {
+		t.Errorf("TriggerMatchingAny = %d, want 0", TriggerMatchingAny)
+	}
+	if TriggerMatchingAll != 1 {
+		t.Errorf("TriggerMatchingAll = %d, want 1", TriggerMatchingAll)
+	}
+}

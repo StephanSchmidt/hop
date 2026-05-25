@@ -13,6 +13,27 @@ import (
 	"time"
 )
 
+// Trigger types for edge rules
+const (
+	TriggerTypeURL            = 0
+	TriggerTypeRequestHeader  = 1
+	TriggerTypeURLExtension   = 3
+	TriggerTypeUrlQueryString = 6
+)
+
+// Trigger matching types
+const (
+	TriggerMatchingAny = 0 // Match ANY trigger
+	TriggerMatchingAll = 1 // Match ALL triggers
+)
+
+// Pattern matching types
+const (
+	PatternMatchingAny  = 0 // Match if ANY pattern matches
+	PatternMatchingAll  = 1 // Match if ALL patterns match
+	PatternMatchingNone = 2 // Match if NONE of the patterns match (negation)
+)
+
 type EdgeRule struct {
 	Guid                string    `json:"Guid,omitempty"`
 	ActionType          int       `json:"ActionType"`
@@ -646,4 +667,138 @@ func displayIssueGroup(title string, issues []CheckIssue) {
 		}
 	}
 	fmt.Println()
+}
+
+// Rule ID tags for identification (survives description edits)
+const (
+	SlashAddNoQueryID   = "[hop:slash-add-nq]"
+	SlashAddWithQueryID = "[hop:slash-add-wq]"
+)
+
+// Slash redirect rule descriptions with ID tags
+const (
+	SlashAddDescNoQuery   = "Trailing slash: add (no query) " + SlashAddNoQueryID
+	SlashAddDescWithQuery = "Trailing slash: add (with query) " + SlashAddWithQueryID
+)
+
+// createSlashAddRules creates edge rules for adding trailing slashes to extensionless URLs
+func createSlashAddRules(ctx context.Context, apiKey, zoneID, host string) error {
+	// Rule 1: Without query string
+	ruleNoQuery := EdgeRule{
+		ActionType:          ActionTypeRedirect,
+		ActionParameter1:    fmt.Sprintf("https://%s%%{Url.Directory}%%{Url.FileName}/", host),
+		ActionParameter2:    "302",
+		TriggerMatchingType: TriggerMatchingAll,
+		Description:         SlashAddDescNoQuery,
+		Enabled:             true,
+		Triggers: []Trigger{
+			{
+				Type:                TriggerTypeURLExtension,
+				PatternMatches:      []string{"{{empty}}"},
+				PatternMatchingType: PatternMatchingAny,
+			},
+			{
+				Type:                TriggerTypeURL,
+				PatternMatches:      []string{"*/"},
+				PatternMatchingType: PatternMatchingNone,
+			},
+			{
+				Type:                TriggerTypeUrlQueryString,
+				PatternMatches:      []string{"?*=*"},
+				PatternMatchingType: PatternMatchingNone,
+			},
+		},
+	}
+
+	fmt.Printf("Creating rule: %s\n", SlashAddDescNoQuery)
+	if err := addEdgeRule(ctx, apiKey, zoneID, ruleNoQuery); err != nil {
+		return fmt.Errorf("failed to create slash-add rule (no query): %w", err)
+	}
+
+	// Rule 2: With query string
+	ruleWithQuery := EdgeRule{
+		ActionType:          ActionTypeRedirect,
+		ActionParameter1:    fmt.Sprintf("https://%s%%{Url.Directory}%%{Url.FileName}/?%%{Request.QueryString}", host),
+		ActionParameter2:    "302",
+		TriggerMatchingType: TriggerMatchingAll,
+		Description:         SlashAddDescWithQuery,
+		Enabled:             true,
+		Triggers: []Trigger{
+			{
+				Type:                TriggerTypeURLExtension,
+				PatternMatches:      []string{"{{empty}}"},
+				PatternMatchingType: PatternMatchingAny,
+			},
+			{
+				Type:                TriggerTypeURL,
+				PatternMatches:      []string{"*/"},
+				PatternMatchingType: PatternMatchingNone,
+			},
+			{
+				Type:                TriggerTypeUrlQueryString,
+				PatternMatches:      []string{"?*=*"},
+				PatternMatchingType: PatternMatchingAny,
+			},
+		},
+	}
+
+	fmt.Printf("Creating rule: %s\n", SlashAddDescWithQuery)
+	if err := addEdgeRule(ctx, apiKey, zoneID, ruleWithQuery); err != nil {
+		return fmt.Errorf("failed to create slash-add rule (with query): %w", err)
+	}
+
+	return nil
+}
+
+// deleteSlashRules removes existing slash redirect rules by ID tag (uses substring matching)
+func deleteSlashRules(ctx context.Context, apiKey, zoneID string, idTags []string) (int, error) {
+	rules, err := listEdgeRules(ctx, apiKey, zoneID)
+	if err != nil {
+		return 0, fmt.Errorf("error listing edge rules: %w", err)
+	}
+
+	deleted := 0
+	for _, rule := range rules {
+		for _, tag := range idTags {
+			if strings.Contains(rule.Description, tag) {
+				fmt.Printf("Removing rule: %s\n", rule.Description)
+				if err := deleteEdgeRule(ctx, apiKey, zoneID, rule.Guid); err != nil {
+					return deleted, fmt.Errorf("failed to delete rule %s: %w", rule.Guid, err)
+				}
+				deleted++
+				break
+			}
+		}
+	}
+
+	return deleted, nil
+}
+
+// deleteEdgeRule removes an edge rule by GUID
+func deleteEdgeRule(ctx context.Context, apiKey, zoneID, guid string) error {
+	url := fmt.Sprintf("https://api.bunny.net/pullzone/%s/edgerules/%s", zoneID, guid)
+
+	req, err := http.NewRequestWithContext(ctx, "DELETE", url, nil)
+	if err != nil {
+		return fmt.Errorf("error creating request: %w", err)
+	}
+
+	req.Header.Set("AccessKey", apiKey)
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("error making request: %w", err)
+	}
+	if resp == nil {
+		return fmt.Errorf("received nil response")
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("API request failed with status %s: %s", resp.Status, string(body))
+	}
+
+	return nil
 }

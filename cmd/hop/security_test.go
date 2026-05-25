@@ -6,20 +6,20 @@ import (
 
 func TestAnalyzeSecurityHeaders(t *testing.T) {
 	tests := []struct {
-		name              string
-		rules             []EdgeRuleResponse
-		wantSuccessCount  int
-		wantIssueCount    int
-		wantErrorCount    int // Issues with severity "error"
-		wantWarningCount  int // Issues with severity "warning"
+		name             string
+		rules            []EdgeRuleResponse
+		wantSuccessCount int
+		wantIssueCount   int
+		wantErrorCount   int // Issues with severity "error"
+		wantWarningCount int // Issues with severity "warning"
 	}{
 		{
-			name:              "no rules configured",
-			rules:             []EdgeRuleResponse{},
-			wantSuccessCount:  0,
-			wantIssueCount:    9, // All 9 headers missing
-			wantErrorCount:    3, // 3 critical headers
-			wantWarningCount:  6, // 6 recommended headers
+			name:             "no rules configured",
+			rules:            []EdgeRuleResponse{},
+			wantSuccessCount: 0,
+			wantIssueCount:   6, // All 6 headers missing
+			wantErrorCount:   3, // 3 critical headers
+			wantWarningCount: 3, // 3 recommended headers
 		},
 		{
 			name: "all critical headers configured",
@@ -43,10 +43,10 @@ func TestAnalyzeSecurityHeaders(t *testing.T) {
 					Enabled:          true,
 				},
 			},
-			wantSuccessCount:  3,
-			wantIssueCount:    6, // 6 recommended headers missing
-			wantErrorCount:    0,
-			wantWarningCount:  6,
+			wantSuccessCount: 3,
+			wantIssueCount:   3, // 3 recommended headers missing
+			wantErrorCount:   0,
+			wantWarningCount: 3,
 		},
 		{
 			name: "all headers configured",
@@ -57,14 +57,11 @@ func TestAnalyzeSecurityHeaders(t *testing.T) {
 				{ActionType: ActionTypeSetResponseHeader, ActionParameter1: "Referrer-Policy", ActionParameter2: "strict-origin-when-cross-origin", Enabled: true},
 				{ActionType: ActionTypeSetResponseHeader, ActionParameter1: "X-XSS-Protection", ActionParameter2: "0", Enabled: true},
 				{ActionType: ActionTypeSetResponseHeader, ActionParameter1: "Permissions-Policy", ActionParameter2: "geolocation=()", Enabled: true},
-				{ActionType: ActionTypeSetResponseHeader, ActionParameter1: "Cross-Origin-Opener-Policy", ActionParameter2: "same-origin", Enabled: true},
-				{ActionType: ActionTypeSetResponseHeader, ActionParameter1: "Cross-Origin-Embedder-Policy", ActionParameter2: "require-corp", Enabled: true},
-				{ActionType: ActionTypeSetResponseHeader, ActionParameter1: "Cross-Origin-Resource-Policy", ActionParameter2: "same-site", Enabled: true},
 			},
-			wantSuccessCount:  9,
-			wantIssueCount:    0,
-			wantErrorCount:    0,
-			wantWarningCount:  0,
+			wantSuccessCount: 6,
+			wantIssueCount:   0,
+			wantErrorCount:   0,
+			wantWarningCount: 0,
 		},
 		{
 			name: "disabled rules ignored",
@@ -76,10 +73,10 @@ func TestAnalyzeSecurityHeaders(t *testing.T) {
 					Enabled:          false, // Disabled
 				},
 			},
-			wantSuccessCount:  0,
-			wantIssueCount:    9,
-			wantErrorCount:    3,
-			wantWarningCount:  6,
+			wantSuccessCount: 0,
+			wantIssueCount:   6,
+			wantErrorCount:   3,
+			wantWarningCount: 3,
 		},
 		{
 			name: "non-header rules ignored",
@@ -91,10 +88,10 @@ func TestAnalyzeSecurityHeaders(t *testing.T) {
 					Enabled:          true,
 				},
 			},
-			wantSuccessCount:  0,
-			wantIssueCount:    9,
-			wantErrorCount:    3,
-			wantWarningCount:  6,
+			wantSuccessCount: 0,
+			wantIssueCount:   6,
+			wantErrorCount:   3,
+			wantWarningCount: 3,
 		},
 		{
 			name: "case insensitive header matching",
@@ -112,10 +109,10 @@ func TestAnalyzeSecurityHeaders(t *testing.T) {
 					Enabled:          true,
 				},
 			},
-			wantSuccessCount:  2,
-			wantIssueCount:    7,
-			wantErrorCount:    1, // Only X-Content-Type-Options missing
-			wantWarningCount:  6,
+			wantSuccessCount: 2,
+			wantIssueCount:   4,
+			wantErrorCount:   1, // Only X-Content-Type-Options missing
+			wantWarningCount: 3,
 		},
 	}
 
@@ -181,8 +178,9 @@ func TestActionTypeConstants(t *testing.T) {
 
 func TestRecommendedHeadersCount(t *testing.T) {
 	// Verify we have the expected number of recommended headers
-	if len(recommendedHeaders) != 9 {
-		t.Errorf("recommendedHeaders count = %d, want 9", len(recommendedHeaders))
+	// Note: COOP, COEP, CORP omitted (break third-party widgets)
+	if len(recommendedHeaders) != 6 {
+		t.Errorf("recommendedHeaders count = %d, want 6", len(recommendedHeaders))
 	}
 
 	// Verify critical headers count (should be 3)

@@ -37,9 +37,7 @@ var recommendedHeaders = []SecurityHeader{
 	{Name: "Referrer-Policy", RecommendedVal: "strict-origin-when-cross-origin", Description: "Controls referrer information", Severity: "warning"},
 	{Name: "X-XSS-Protection", RecommendedVal: "0", Description: "Disables legacy XSS filter", Severity: "warning"},
 	{Name: "Permissions-Policy", RecommendedVal: "geolocation=(), camera=(), microphone=()", Description: "Restricts browser features", Severity: "warning"},
-	{Name: "Cross-Origin-Opener-Policy", RecommendedVal: "same-origin", Description: "Isolates browsing context", Severity: "warning"},
-	{Name: "Cross-Origin-Embedder-Policy", RecommendedVal: "require-corp", Description: "Blocks cross-origin resources", Severity: "warning"},
-	{Name: "Cross-Origin-Resource-Policy", RecommendedVal: "same-site", Description: "Limits resource loading", Severity: "warning"},
+	// Note: COOP, COEP, CORP headers omitted - they break third-party widgets (cal.com, analytics, etc.)
 }
 
 // checkSecurityHeaders validates that recommended security headers are configured as edge rules
@@ -146,7 +144,7 @@ func fixSecurityHeaders(ctx context.Context, apiKey, zoneID string) error {
 			ActionParameter1: header.Name,
 			ActionParameter2: header.RecommendedVal,
 			Triggers: []Trigger{{
-				Type:                0,            // URL trigger
+				Type:                0,             // URL trigger
 				PatternMatches:      []string{"*"}, // Match all URLs
 				PatternMatchingType: 0,
 			}},

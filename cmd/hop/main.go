@@ -26,7 +26,8 @@ var (
 	description string
 
 	// CDN push specific
-	localDir string
+	localDir   string
+	purgeCache bool
 
 	// Stats specific
 	days     int
@@ -37,6 +38,9 @@ var (
 	minifyCacheDir string
 	minifyForce    bool
 	minifyExclude  []string
+
+	// Slash redirect specific
+	slashHost string
 )
 
 // createDebugContext creates a context with debug flag from global CLI
@@ -73,6 +77,8 @@ func init() {
 	rulesCmd.AddCommand(rulesAddCmd)
 	rulesCmd.AddCommand(rulesListCmd)
 	rulesCmd.AddCommand(rulesCheckCmd)
+	rulesCmd.AddCommand(rulesSlashAddCmd)
+	rulesCmd.AddCommand(rulesSlashRemoveCmd)
 
 	// Setup CDN subcommands
 	cdnCmd.AddCommand(cdnPushCmd)
@@ -127,6 +133,7 @@ func init() {
 	_ = cdnPushCmd.MarkFlagRequired("key")
 	_ = cdnPushCmd.MarkFlagRequired("zone")
 	_ = cdnPushCmd.MarkFlagRequired("from")
+	cdnPushCmd.Flags().BoolVar(&purgeCache, "purge", false, "Purge pull zone cache after upload")
 
 	// Setup flags for CDN check command
 	cdnCheckCmd.Flags().StringVarP(&apiKey, "key", "k", "", "Bunny CDN API key (required)")
@@ -171,6 +178,20 @@ func init() {
 	securityFixCmd.Flags().StringVarP(&zone, "zone", "z", "", "Pull Zone name (required)")
 	_ = securityFixCmd.MarkFlagRequired("key")
 	_ = securityFixCmd.MarkFlagRequired("zone")
+
+	// Setup flags for rules slash-add command
+	rulesSlashAddCmd.Flags().StringVarP(&apiKey, "key", "k", "", "Bunny CDN API key (required)")
+	rulesSlashAddCmd.Flags().StringVarP(&zone, "zone", "z", "", "Pull Zone name (required)")
+	rulesSlashAddCmd.Flags().StringVar(&slashHost, "host", "", "Destination hostname for redirects (required)")
+	_ = rulesSlashAddCmd.MarkFlagRequired("key")
+	_ = rulesSlashAddCmd.MarkFlagRequired("zone")
+	_ = rulesSlashAddCmd.MarkFlagRequired("host")
+
+	// Setup flags for rules slash-remove command (only needs key and zone)
+	rulesSlashRemoveCmd.Flags().StringVarP(&apiKey, "key", "k", "", "Bunny CDN API key (required)")
+	rulesSlashRemoveCmd.Flags().StringVarP(&zone, "zone", "z", "", "Pull Zone name (required)")
+	_ = rulesSlashRemoveCmd.MarkFlagRequired("key")
+	_ = rulesSlashRemoveCmd.MarkFlagRequired("zone")
 }
 
 // Global check command
@@ -210,6 +231,24 @@ var rulesCheckCmd = &cobra.Command{
 	Short: "Check redirect rules for potential issues",
 	Run: func(cmd *cobra.Command, args []string) {
 		handleCheck()
+	},
+}
+
+var rulesSlashAddCmd = &cobra.Command{
+	Use:   "slash-add",
+	Short: "Add trailing slash redirects for extensionless URLs",
+	Long:  "Creates edge rules to redirect URLs without trailing slashes to include them (e.g., /about -> /about/). Only affects extensionless paths, not files like .png, .js, etc.",
+	Run: func(cmd *cobra.Command, args []string) {
+		handleSlashAdd()
+	},
+}
+
+var rulesSlashRemoveCmd = &cobra.Command{
+	Use:   "slash-remove",
+	Short: "Remove trailing slash redirect rules",
+	Long:  "Removes the edge rules created by slash-add.",
+	Run: func(cmd *cobra.Command, args []string) {
+		handleSlashRemove()
 	},
 }
 
@@ -380,6 +419,14 @@ func handleCDNPush() {
 			}
 		}
 		os.Exit(1)
+	}
+
+	if purgeCache && successful > 0 {
+		fmt.Print("Purging pull zone cache... ")
+		if err := purgePullZoneCache(ctx, apiKey, pullZoneID); err != nil {
+			log.Fatalf("Error purging cache: %v", err)
+		}
+		fmt.Println("done")
 	}
 }
 
@@ -959,5 +1006,69 @@ func handleSecurityFix() {
 	err = fixSecurityHeaders(ctx, apiKey, zoneID)
 	if err != nil {
 		log.Fatalf("Error fixing security headers: %v", err)
+	}
+}
+
+func handleSlashAdd() {
+	baseCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	ctx := createDebugContext(baseCtx)
+
+	// Look up pull zone by name
+	id, err := findPullZoneByName(ctx, apiKey, zone)
+	if err != nil {
+		log.Fatalf("Error finding pull zone '%s': %v", zone, err)
+	}
+	zoneID := fmt.Sprintf("%d", id)
+	fmt.Printf("Found pull zone '%s' with ID: %s\n", zone, zoneID)
+
+	// Remove existing slash-add rules first (for idempotency)
+	_, err = deleteSlashRules(ctx, apiKey, zoneID, []string{
+		SlashAddNoQueryID,
+		SlashAddWithQueryID,
+	})
+	if err != nil {
+		log.Fatalf("Error removing existing rules: %v", err)
+	}
+
+	// Create new slash-add rules
+	err = createSlashAddRules(ctx, apiKey, zoneID, slashHost)
+	if err != nil {
+		log.Fatalf("Error creating slash-add rules: %v", err)
+	}
+
+	fmt.Println("\nTrailing slash redirect rules created successfully.")
+	fmt.Printf("URLs without extensions will redirect to include trailing slash.\n")
+	fmt.Printf("Destination host: %s\n", slashHost)
+}
+
+func handleSlashRemove() {
+	baseCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	ctx := createDebugContext(baseCtx)
+
+	// Look up pull zone by name
+	id, err := findPullZoneByName(ctx, apiKey, zone)
+	if err != nil {
+		log.Fatalf("Error finding pull zone '%s': %v", zone, err)
+	}
+	zoneID := fmt.Sprintf("%d", id)
+	fmt.Printf("Found pull zone '%s' with ID: %s\n", zone, zoneID)
+
+	// Remove slash-add rules
+	deleted, err := deleteSlashRules(ctx, apiKey, zoneID, []string{
+		SlashAddNoQueryID,
+		SlashAddWithQueryID,
+	})
+	if err != nil {
+		log.Fatalf("Error removing slash rules: %v", err)
+	}
+
+	if deleted == 0 {
+		fmt.Println("No trailing slash rules found to remove.")
+	} else {
+		fmt.Printf("\nRemoved %d trailing slash rule(s).\n", deleted)
 	}
 }

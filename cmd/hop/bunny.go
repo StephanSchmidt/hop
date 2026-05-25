@@ -191,6 +191,34 @@ func getStorageZoneByPullZone(ctx context.Context, apiKey string, pullZoneID int
 	return nil, fmt.Errorf("no storage zone found for pull zone '%s'", pullZoneDetails.Name)
 }
 
+func purgePullZoneCache(ctx context.Context, apiKey string, pullZoneID int64) error {
+	url := fmt.Sprintf("https://api.bunny.net/pullzone/%d/purgeCache", pullZoneID)
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, nil)
+	if err != nil {
+		return fmt.Errorf("error creating request: %v", err)
+	}
+
+	req.Header.Set("AccessKey", apiKey)
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("error making request: %v", err)
+	}
+	if resp == nil {
+		return fmt.Errorf("received nil response")
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("API request failed with status %s: %s", resp.Status, string(body))
+	}
+
+	return nil
+}
+
 // strictUnmarshal unmarshals JSON and fails if our struct has fields that don't exist in the API response
 func strictUnmarshal(data []byte, v interface{}) error {
 	// First, unmarshal into a map to get API fields
