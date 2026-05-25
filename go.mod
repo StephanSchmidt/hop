@@ -1,4 +1,4 @@
-module hop
+module github.com/StephanSchmidt/hop
 
 go 1.24.0
 
