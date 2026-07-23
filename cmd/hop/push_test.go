@@ -52,7 +52,7 @@ func TestShouldSkipUpload(t *testing.T) {
 			wantReason: "",
 		},
 		{
-			name: "same size with no remote checksum should skip with size match reason",
+			name: "same size with no remote checksum should upload (size alone unreliable)",
 			localFile: LocalFileInfo{
 				Size:     100,
 				Checksum: "ABC123",
@@ -61,11 +61,11 @@ func TestShouldSkipUpload(t *testing.T) {
 				Size:     100,
 				Checksum: "",
 			},
-			wantSkip:   true,
-			wantReason: "size match (no checksum)",
+			wantSkip:   false,
+			wantReason: "",
 		},
 		{
-			name: "same size with no local checksum should skip with size match reason",
+			name: "same size with no local checksum should upload (size alone unreliable)",
 			localFile: LocalFileInfo{
 				Size:     100,
 				Checksum: "",
@@ -74,11 +74,11 @@ func TestShouldSkipUpload(t *testing.T) {
 				Size:     100,
 				Checksum: "DEF456",
 			},
-			wantSkip:   true,
-			wantReason: "size match (no checksum)",
+			wantSkip:   false,
+			wantReason: "",
 		},
 		{
-			name: "same size with no checksums should skip with size match reason",
+			name: "same size with no checksums should upload (size alone unreliable)",
 			localFile: LocalFileInfo{
 				Size:     100,
 				Checksum: "",
@@ -87,8 +87,8 @@ func TestShouldSkipUpload(t *testing.T) {
 				Size:     100,
 				Checksum: "",
 			},
-			wantSkip:   true,
-			wantReason: "size match (no checksum)",
+			wantSkip:   false,
+			wantReason: "",
 		},
 		{
 			name: "zero size files with matching checksums should skip",

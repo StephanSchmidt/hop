@@ -43,10 +43,11 @@ type PullZone struct {
 }
 
 type PullZoneDetails struct {
-	Id        int64              `json:"Id"`
-	Name      string             `json:"Name"`
-	EdgeRules []EdgeRuleResponse `json:"EdgeRules"`
-	Hostnames []Hostname         `json:"Hostnames"`
+	Id            int64              `json:"Id"`
+	Name          string             `json:"Name"`
+	StorageZoneId int64              `json:"StorageZoneId"`
+	EdgeRules     []EdgeRuleResponse `json:"EdgeRules"`
+	Hostnames     []Hostname         `json:"Hostnames"`
 }
 
 type Hostname struct {
@@ -181,7 +182,16 @@ func getStorageZoneByPullZone(ctx context.Context, apiKey string, pullZoneID int
 		return nil, fmt.Errorf("error parsing JSON response: %v", err)
 	}
 
-	// Find storage zone that matches the pull zone name
+	// Prefer the storage zone linked as the pull zone's origin
+	if pullZoneDetails.StorageZoneId > 0 {
+		for _, zone := range storageZones {
+			if zone.Id == pullZoneDetails.StorageZoneId {
+				return &zone, nil
+			}
+		}
+	}
+
+	// Fall back to a storage zone that matches the pull zone name
 	for _, zone := range storageZones {
 		if strings.EqualFold(zone.Name, pullZoneDetails.Name) {
 			return &zone, nil

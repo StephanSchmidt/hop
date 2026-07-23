@@ -68,7 +68,7 @@ type Minifier struct {
 // NewMinifier creates a new Minifier instance
 func NewMinifier(config MinifyConfig) *Minifier {
 	m := minify.New()
-	m.Add("text/html", &html.Minifier{KeepDocumentTags: true})
+	m.Add("text/html", &html.Minifier{KeepDocumentTags: true, KeepDefaultAttrVals: true})
 	m.AddFunc("text/css", css.Minify)
 	m.AddFunc("application/javascript", js.Minify)
 	m.AddFunc("text/javascript", js.Minify)

@@ -178,17 +178,17 @@ func TestStrictUnmarshal(t *testing.T) {
 	}{
 		{
 			name:        "valid JSON matching struct",
-			jsonData:    `{"Id": 123, "Name": "test", "EdgeRules": [], "Hostnames": []}`,
+			jsonData:    `{"Id": 123, "Name": "test", "StorageZoneId": 456, "EdgeRules": [], "Hostnames": []}`,
 			expectError: false,
 		},
 		{
 			name:        "JSON with extra field - should be allowed",
-			jsonData:    `{"Id": 123, "Name": "test", "EdgeRules": [], "Hostnames": [], "ExtraField": "value"}`,
+			jsonData:    `{"Id": 123, "Name": "test", "StorageZoneId": 456, "EdgeRules": [], "Hostnames": [], "ExtraField": "value"}`,
 			expectError: false, // Extra API fields are now OK
 		},
 		{
 			name:        "JSON missing field that struct expects",
-			jsonData:    `{"Name": "test", "EdgeRules": [], "Hostnames": []}`,
+			jsonData:    `{"Name": "test", "StorageZoneId": 456, "EdgeRules": [], "Hostnames": []}`,
 			expectError: true, // Missing API fields that struct expects should fail
 			errorMsg:    "struct expects field 'Id'",
 		},

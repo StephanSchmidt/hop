@@ -227,11 +227,22 @@ func normalizeURL(urlStr string) string {
 	return urlStr
 }
 
+// extractSourceURL returns the source path a redirect rule matches on.
+// Only positive URL triggers qualify: extension/query-string triggers and
+// negated URL patterns (e.g. the slash rules' "NOT */") are not sources.
 func extractSourceURL(rule EdgeRuleResponse) string {
-	if len(rule.Triggers) > 0 && len(rule.Triggers[0].PatternMatches) > 0 {
-		return rule.Triggers[0].PatternMatches[0]
+	for _, trigger := range rule.Triggers {
+		if trigger.Type == TriggerTypeURL && trigger.PatternMatchingType != PatternMatchingNone && len(trigger.PatternMatches) > 0 {
+			return trigger.PatternMatches[0]
+		}
 	}
 	return ""
+}
+
+// hasBunnyVariables reports whether a URL contains Bunny edge variables
+// like %{Url.Directory} that only resolve at request time.
+func hasBunnyVariables(urlStr string) bool {
+	return strings.Contains(urlStr, "%{")
 }
 
 func buildRedirectMap(rules []EdgeRuleResponse) *RedirectMap {
@@ -488,6 +499,11 @@ func checkURLHealth(ctx context.Context, rules []EdgeRuleResponse) []CheckIssue 
 
 			// Skip relative URLs for health checks
 			if !strings.HasPrefix(destination, "http") {
+				continue
+			}
+
+			// Templated destinations can't be validated or fetched statically
+			if hasBunnyVariables(destination) {
 				continue
 			}
 
@@ -801,4 +817,180 @@ func deleteEdgeRule(ctx context.Context, apiKey, zoneID, guid string) error {
 	}
 
 	return nil
+}
+
+// RedirectChain describes a redirect rule whose destination is itself
+// redirected, so a visitor takes more than one hop to reach the final page.
+type RedirectChain struct {
+	Rule    *EdgeRuleResponse
+	Sources []string
+	Current string   // the destination the rule points at today
+	Final   string   // the terminal destination the chain resolves to
+	Hops    []string // intermediate destinations, in order, ending at Final
+}
+
+// extractSourcePatterns returns every source pattern a redirect rule matches
+// on. extractSourceURL only returns the first, which is enough for reporting
+// but not for resolving chains: a rule that redirects four patterns is the
+// destination of four different URLs.
+func extractSourcePatterns(rule EdgeRuleResponse) []string {
+	var patterns []string
+	for _, trigger := range rule.Triggers {
+		if trigger.Type == TriggerTypeURL && trigger.PatternMatchingType != PatternMatchingNone {
+			patterns = append(patterns, trigger.PatternMatches...)
+		}
+	}
+	return patterns
+}
+
+// splitFragment separates a URL from its #fragment.
+func splitFragment(urlStr string) (base, fragment string) {
+	if i := strings.Index(urlStr, "#"); i >= 0 {
+		return urlStr[:i], urlStr[i:]
+	}
+	return urlStr, ""
+}
+
+// urlPath returns the path portion of a URL, or the input unchanged when it is
+// already a bare path. Bunny patterns are written both ways.
+func urlPath(urlStr string) string {
+	if u, err := url.Parse(urlStr); err == nil && u.Host != "" {
+		return u.Path
+	}
+	return urlStr
+}
+
+// buildSourceIndex maps normalized source patterns to their rules, so a
+// destination URL can be looked up as the source of a further redirect. Both
+// the full URL and the bare path are indexed because Bunny patterns use either
+// form. Path keys are only unambiguous within a single pull zone, which is the
+// scope hop operates on.
+func buildSourceIndex(rules []EdgeRuleResponse) map[string]*EdgeRuleResponse {
+	index := make(map[string]*EdgeRuleResponse)
+	for i, rule := range rules {
+		if rule.ActionType != 1 || hasBunnyVariables(rule.ActionParameter1) {
+			continue
+		}
+		for _, pattern := range extractSourcePatterns(rule) {
+			if hasBunnyVariables(pattern) {
+				continue
+			}
+			base, _ := splitFragment(pattern)
+			for _, key := range []string{normalizeURL(base), normalizeURL(urlPath(base))} {
+				if key == "" {
+					continue
+				}
+				if _, exists := index[key]; !exists {
+					index[key] = &rules[i]
+				}
+			}
+		}
+	}
+	return index
+}
+
+// maxRedirectDepth bounds chain resolution so a redirect loop cannot spin.
+const maxRedirectDepth = 10
+
+// resolveFinalDestination follows dest through any further redirect rules and
+// returns the terminal URL plus the hops taken to reach it. A fragment picked
+// up along the way is carried to the final URL when the final URL has none, so
+// flattening /a -> /b#section -> /c lands on /c#section rather than /c.
+// Returns an error on a loop or on exceeding maxRedirectDepth.
+func resolveFinalDestination(dest string, index map[string]*EdgeRuleResponse, self *EdgeRuleResponse) (string, []string, error) {
+	var hops []string
+	seen := map[string]bool{}
+	carriedFragment := ""
+	current := dest
+
+	for depth := 0; depth < maxRedirectDepth; depth++ {
+		base, fragment := splitFragment(current)
+		if fragment != "" {
+			carriedFragment = fragment
+		}
+
+		key := normalizeURL(base)
+		next, ok := index[key]
+		if !ok {
+			next, ok = index[normalizeURL(urlPath(base))]
+		}
+		// A terminal URL has no rule. A rule whose own destination normalizes
+		// onto one of its own patterns (say /a -> /a/) is terminal too, but
+		// only at the first hop: coming back to the starting rule later means
+		// the chain loops, which the seen check below reports.
+		isSelfAtStart := depth == 0 && self != nil && ok && next != nil && next.Guid == self.Guid
+		if !ok || next == nil || isSelfAtStart {
+			if carriedFragment != "" && !strings.Contains(current, "#") {
+				current += carriedFragment
+			}
+			return current, hops, nil
+		}
+		if !next.Enabled {
+			return current, hops, nil
+		}
+		if seen[key] {
+			return "", hops, fmt.Errorf("redirect loop at %s", current)
+		}
+		seen[key] = true
+
+		current = next.ActionParameter1
+		if current == "" || hasBunnyVariables(current) {
+			return "", hops, fmt.Errorf("cannot resolve destination of rule %s", next.Guid)
+		}
+		hops = append(hops, current)
+	}
+	return "", hops, fmt.Errorf("redirect chain longer than %d hops starting at %s", maxRedirectDepth, dest)
+}
+
+// findRedirectChains returns every 302 rule that points at a URL which is
+// itself redirected, along with the terminal destination each one should point
+// at instead. Rules using Bunny edge variables are skipped: their destination
+// is only known at request time.
+func findRedirectChains(rules []EdgeRuleResponse) ([]RedirectChain, []error) {
+	index := buildSourceIndex(rules)
+
+	var chains []RedirectChain
+	var problems []error
+
+	for i, rule := range rules {
+		if rule.ActionType != 1 || rule.ActionParameter2 != "302" {
+			continue
+		}
+		if rule.ActionParameter1 == "" || hasBunnyVariables(rule.ActionParameter1) {
+			continue
+		}
+
+		final, hops, err := resolveFinalDestination(rule.ActionParameter1, index, &rules[i])
+		if err != nil {
+			problems = append(problems, fmt.Errorf("rule %s (%s): %w", rule.Guid, rule.Description, err))
+			continue
+		}
+		if len(hops) == 0 || final == rule.ActionParameter1 {
+			continue
+		}
+		chains = append(chains, RedirectChain{
+			Rule:    &rules[i],
+			Sources: extractSourcePatterns(rule),
+			Current: rule.ActionParameter1,
+			Final:   final,
+			Hops:    hops,
+		})
+	}
+	return chains, problems
+}
+
+// retargetEdgeRule rewrites an existing rule's destination in place, keeping
+// its GUID, patterns and description.
+func retargetEdgeRule(ctx context.Context, apiKey, zoneID string, rule *EdgeRuleResponse, newDest string) error {
+	updated := EdgeRule{
+		Guid:                rule.Guid,
+		ActionType:          rule.ActionType,
+		ActionParameter1:    newDest,
+		ActionParameter2:    rule.ActionParameter2,
+		TriggerMatchingType: rule.TriggerMatchingType,
+		Description:         rule.Description,
+		Enabled:             rule.Enabled,
+		Triggers:            rule.Triggers,
+	}
+	return addEdgeRule(ctx, apiKey, zoneID, updated)
 }

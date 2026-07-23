@@ -124,11 +124,9 @@ func shouldSkipUpload(localFile LocalFileInfo, remoteFile RemoteFileInfo) (bool,
 		return false, ""
 	}
 
-	// Fallback to size comparison only
-	if localFile.Size == remoteFile.Size {
-		return true, "size match (no checksum)"
-	}
-
+	// No checksum available on one side: size match alone is not reliable
+	// (an edit can preserve byte size), so upload to be safe rather than
+	// silently skip — a skipped upload also suppresses the cache purge.
 	return false, ""
 }
 

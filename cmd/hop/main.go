@@ -41,6 +41,9 @@ var (
 
 	// Slash redirect specific
 	slashHost string
+
+	// Rules flatten specific
+	dryRun bool
 )
 
 // createDebugContext creates a context with debug flag from global CLI
@@ -57,8 +60,58 @@ func main() {
 
 var rootCmd = &cobra.Command{
 	Use:   "hop",
-	Short: "A Go command-line tool to manage 302 redirects, content, and statistics in Bunny CDN pull zones",
-	Long:  "A Go command-line tool to manage 302 redirects, content, and statistics in Bunny CDN pull zones.",
+	Short: "Manage Bunny CDN pull zones: redirects, content, DNS, security headers, and statistics",
+	Long: `hop is a command-line tool for managing Bunny CDN pull zones.
+
+It manages 302 redirects (edge rules), pushes static site content to CDN
+storage, checks DNS and SSL configuration, verifies security headers, and
+shows traffic statistics. It also minifies and optimizes static sites locally.
+
+Most commands require two flags:
+  --key <api-key>   Bunny CDN account API key (find it in the Bunny dashboard)
+  --zone <name>     Pull zone NAME (not the numeric ID); hop resolves the ID
+
+Start here (for AI agents and new users):
+  1. Run 'hop check --key <api-key> --zone <name>' first. It is read-only,
+     verifies the API key and zone name are valid, and reports the current
+     state of rules, DNS, and SSL in one pass.
+  2. Use 'hop rules list' and 'hop dns list' to inspect current
+     configuration before making changes.
+  3. Run 'hop <command> --help' for flags and examples of any command.
+  Read-only commands: check, rules list, rules check, dns list, dns check,
+  dns www-check, cdn check, security check, stats show. Commands that modify
+  state: rules add, rules flatten, rules slash-add, rules slash-remove,
+  dns www-add, dns www-remove, cdn push, security fix.
+
+Check commands (check, rules check, dns check, cdn check, security check)
+exit with status 1 when issues are found, 0 when everything passes. All
+output is plain text on stdout.
+
+Typical deploy workflow for a static site:
+  hop minify ./site ./dist
+  hop cdn push --key $BUNNY_API_KEY --zone myzone --from ./dist --purge
+  hop check --key $BUNNY_API_KEY --zone myzone`,
+	Example: `  # Run all checks (redirect rules, DNS, SSL) for a pull zone
+  hop check --key $BUNNY_API_KEY --zone myzone
+
+  # Add a 302 redirect from a path to a full URL
+  hop rules add --key $BUNNY_API_KEY --zone myzone --from /old-page --to https://www.example.com/new-page/
+
+  # List all 302 redirects in a pull zone
+  hop rules list --key $BUNNY_API_KEY --zone myzone
+
+  # Minify HTML/CSS/JS and convert images to WebP (local, no API key needed)
+  hop minify ./public ./dist
+
+  # Upload a directory to CDN storage and purge the cache
+  hop cdn push --key $BUNNY_API_KEY --zone myzone --from ./dist --purge
+
+  # Check and fix security headers
+  hop security check --key $BUNNY_API_KEY --zone myzone
+  hop security fix --key $BUNNY_API_KEY --zone myzone
+
+  # Show traffic statistics for the last 14 days
+  hop stats show --key $BUNNY_API_KEY --zone myzone --days 14`,
 }
 
 func init() {
@@ -79,6 +132,7 @@ func init() {
 	rulesCmd.AddCommand(rulesCheckCmd)
 	rulesCmd.AddCommand(rulesSlashAddCmd)
 	rulesCmd.AddCommand(rulesSlashRemoveCmd)
+	rulesCmd.AddCommand(rulesFlattenCmd)
 
 	// Setup CDN subcommands
 	cdnCmd.AddCommand(cdnPushCmd)
@@ -87,6 +141,9 @@ func init() {
 	// Setup DNS subcommands
 	dnsCmd.AddCommand(dnsListCmd)
 	dnsCmd.AddCommand(dnsCheckCmd)
+	dnsCmd.AddCommand(dnsWWWCheckCmd)
+	dnsCmd.AddCommand(dnsWWWAddCmd)
+	dnsCmd.AddCommand(dnsWWWRemoveCmd)
 
 	// Setup stats subcommands
 	statsCmd.AddCommand(statsShowCmd)
@@ -153,6 +210,14 @@ func init() {
 	_ = dnsCheckCmd.MarkFlagRequired("key")
 	_ = dnsCheckCmd.MarkFlagRequired("zone")
 
+	// Setup flags for DNS www redirect commands
+	for _, cmd := range []*cobra.Command{dnsWWWCheckCmd, dnsWWWAddCmd, dnsWWWRemoveCmd} {
+		cmd.Flags().StringVarP(&apiKey, "key", "k", "", "Bunny CDN API key (required)")
+		cmd.Flags().StringVarP(&zone, "zone", "z", "", "Pull Zone name (required)")
+		_ = cmd.MarkFlagRequired("key")
+		_ = cmd.MarkFlagRequired("zone")
+	}
+
 	// Setup flags for stats show command
 	statsShowCmd.Flags().StringVarP(&apiKey, "key", "k", "", "Bunny CDN API key (required)")
 	statsShowCmd.Flags().StringVarP(&zone, "zone", "z", "", "Pull Zone name (required)")
@@ -190,6 +255,12 @@ func init() {
 	// Setup flags for rules slash-remove command (only needs key and zone)
 	rulesSlashRemoveCmd.Flags().StringVarP(&apiKey, "key", "k", "", "Bunny CDN API key (required)")
 	rulesSlashRemoveCmd.Flags().StringVarP(&zone, "zone", "z", "", "Pull Zone name (required)")
+
+	rulesFlattenCmd.Flags().StringVarP(&apiKey, "key", "k", "", "Bunny CDN API key (required)")
+	rulesFlattenCmd.Flags().StringVarP(&zone, "zone", "z", "", "Pull Zone name (required)")
+	rulesFlattenCmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show what would change without writing")
+	_ = rulesFlattenCmd.MarkFlagRequired("key")
+	_ = rulesFlattenCmd.MarkFlagRequired("zone")
 	_ = rulesSlashRemoveCmd.MarkFlagRequired("key")
 	_ = rulesSlashRemoveCmd.MarkFlagRequired("zone")
 }
@@ -198,6 +269,14 @@ func init() {
 var checkCmd = &cobra.Command{
 	Use:   "check",
 	Short: "Run all checks (rules, DNS, SSL) for a pull zone",
+	Long: `Run all checks for a pull zone in one pass: redirect rule health,
+DNS records for all pull zone hostnames, and SSL configuration.
+
+Exits with status 1 if any check finds an error, 0 if all checks pass.`,
+	Example: `  hop check --key $BUNNY_API_KEY --zone myzone
+
+  # Skip HTTP health checks of redirect targets for faster execution
+  hop check --key $BUNNY_API_KEY --zone myzone --skip-health`,
 	Run: func(cmd *cobra.Command, args []string) {
 		handleGeneralCheck()
 	},
@@ -207,12 +286,26 @@ var checkCmd = &cobra.Command{
 var rulesCmd = &cobra.Command{
 	Use:   "rules",
 	Short: "Manage redirect rules",
-	Long:  "Manage redirect rules in Bunny CDN pull zones",
+	Long:  "Manage 302 redirect rules (edge rules) in Bunny CDN pull zones.",
+	Example: `  hop rules list --key $BUNNY_API_KEY --zone myzone
+  hop rules add --key $BUNNY_API_KEY --zone myzone --from /old --to https://www.example.com/new/
+  hop rules check --key $BUNNY_API_KEY --zone myzone
+  hop rules flatten --key $BUNNY_API_KEY --zone myzone --dry-run`,
 }
 
 var rulesAddCmd = &cobra.Command{
 	Use:   "add",
 	Short: "Add a new 302 redirect",
+	Long: `Add a 302 redirect from a source URL path to a destination URL.
+
+--from is a URL pattern matched against incoming requests (e.g. /old-page
+or https://example.com/old-page). --to is the full destination URL.
+If a redirect rule with the same destination already exists, the source
+pattern is added to that rule instead of creating a duplicate.`,
+	Example: `  hop rules add --key $BUNNY_API_KEY --zone myzone --from /old-page --to https://www.example.com/new-page/
+
+  # With a description for the Bunny dashboard
+  hop rules add --key $BUNNY_API_KEY --zone myzone --from /blog/old --to https://www.example.com/blog/new/ --desc "Renamed blog post"`,
 	Run: func(cmd *cobra.Command, args []string) {
 		handleAdd()
 	},
@@ -221,6 +314,9 @@ var rulesAddCmd = &cobra.Command{
 var rulesListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List all existing 302 redirects",
+	Long: `List all 302 redirect rules in a pull zone, including their source
+patterns, destination URLs, enabled status, and rule GUIDs.`,
+	Example: `  hop rules list --key $BUNNY_API_KEY --zone myzone`,
 	Run: func(cmd *cobra.Command, args []string) {
 		handleList()
 	},
@@ -229,6 +325,15 @@ var rulesListCmd = &cobra.Command{
 var rulesCheckCmd = &cobra.Command{
 	Use:   "check",
 	Short: "Check redirect rules for potential issues",
+	Long: `Check redirect rules for problems such as broken destination URLs,
+duplicate patterns, and disabled rules. By default the destination URLs
+are health-checked over HTTP.
+
+Exits with status 1 if issues are found, 0 otherwise.`,
+	Example: `  hop rules check --key $BUNNY_API_KEY --zone myzone
+
+  # Skip HTTP health checks of destination URLs
+  hop rules check --key $BUNNY_API_KEY --zone myzone --skip-health`,
 	Run: func(cmd *cobra.Command, args []string) {
 		handleCheck()
 	},
@@ -237,18 +342,47 @@ var rulesCheckCmd = &cobra.Command{
 var rulesSlashAddCmd = &cobra.Command{
 	Use:   "slash-add",
 	Short: "Add trailing slash redirects for extensionless URLs",
-	Long:  "Creates edge rules to redirect URLs without trailing slashes to include them (e.g., /about -> /about/). Only affects extensionless paths, not files like .png, .js, etc.",
+	Long: `Creates edge rules to redirect URLs without trailing slashes to include
+them (e.g., /about -> /about/). Only affects extensionless paths, not
+files like .png, .js, etc.
+
+--host is the destination hostname used in the redirect target.
+The command is idempotent: existing slash rules are replaced.`,
+	Example: `  hop rules slash-add --key $BUNNY_API_KEY --zone myzone --host www.example.com`,
 	Run: func(cmd *cobra.Command, args []string) {
 		handleSlashAdd()
 	},
 }
 
 var rulesSlashRemoveCmd = &cobra.Command{
-	Use:   "slash-remove",
-	Short: "Remove trailing slash redirect rules",
-	Long:  "Removes the edge rules created by slash-add.",
+	Use:     "slash-remove",
+	Short:   "Remove trailing slash redirect rules",
+	Long:    "Removes the edge rules created by slash-add.",
+	Example: `  hop rules slash-remove --key $BUNNY_API_KEY --zone myzone`,
 	Run: func(cmd *cobra.Command, args []string) {
 		handleSlashRemove()
+	},
+}
+
+var rulesFlattenCmd = &cobra.Command{
+	Use:   "flatten",
+	Short: "Rewrite redirect chains to point at their final destination",
+	Long: `Find redirects whose destination is itself redirected and repoint them
+at the end of the chain, so visitors and crawlers take one hop instead of
+several.
+
+Chains usually appear when a page is consolidated twice: an old rule still
+points at a URL that has since been redirected somewhere else. Rules using
+Bunny edge variables (such as the trailing-slash rules) are left alone
+because their destination is only known at request time.
+
+Exits with status 1 if a chain cannot be resolved.`,
+	Example: `  hop rules flatten --key $BUNNY_API_KEY --zone myzone --dry-run
+
+  # Apply the changes
+  hop rules flatten --key $BUNNY_API_KEY --zone myzone`,
+	Run: func(cmd *cobra.Command, args []string) {
+		handleFlatten()
 	},
 }
 
@@ -256,12 +390,23 @@ var rulesSlashRemoveCmd = &cobra.Command{
 var cdnCmd = &cobra.Command{
 	Use:   "cdn",
 	Short: "Manage CDN content",
-	Long:  "Manage CDN content in Bunny CDN pull zones",
+	Long:  "Manage CDN content in Bunny CDN pull zones.",
+	Example: `  hop cdn push --key $BUNNY_API_KEY --zone myzone --from ./dist --purge
+  hop cdn check --key $BUNNY_API_KEY --zone myzone`,
 }
 
 var cdnPushCmd = &cobra.Command{
 	Use:   "push",
 	Short: "Push files from local directory to CDN storage",
+	Long: `Upload all files from a local directory to the storage zone linked to
+the pull zone. Unchanged files (same checksum) are skipped, so repeated
+pushes only transfer what changed.
+
+Exits with status 1 if any upload fails.`,
+	Example: `  hop cdn push --key $BUNNY_API_KEY --zone myzone --from ./dist
+
+  # Purge the pull zone cache after upload so changes go live immediately
+  hop cdn push --key $BUNNY_API_KEY --zone myzone --from ./dist --purge`,
 	Run: func(cmd *cobra.Command, args []string) {
 		handleCDNPush()
 	},
@@ -270,6 +415,11 @@ var cdnPushCmd = &cobra.Command{
 var cdnCheckCmd = &cobra.Command{
 	Use:   "check",
 	Short: "Check SSL configuration for all pull zone hostnames",
+	Long: `Check that every hostname attached to the pull zone has SSL properly
+configured.
+
+Exits with status 1 if issues are found, 0 otherwise.`,
+	Example: `  hop cdn check --key $BUNNY_API_KEY --zone myzone`,
 	Run: func(cmd *cobra.Command, args []string) {
 		handleCDNCheck()
 	},
@@ -279,12 +429,19 @@ var cdnCheckCmd = &cobra.Command{
 var dnsCmd = &cobra.Command{
 	Use:   "dns",
 	Short: "Manage DNS records",
-	Long:  "Manage DNS records for Bunny CDN pull zones",
+	Long:  "Manage DNS records for Bunny CDN pull zones.",
+	Example: `  hop dns list --key $BUNNY_API_KEY --zone myzone
+  hop dns check --key $BUNNY_API_KEY --zone myzone
+  hop dns www-check --key $BUNNY_API_KEY --zone myzone
+  hop dns www-add --key $BUNNY_API_KEY --zone myzone`,
 }
 
 var dnsListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List DNS A and CNAME records for a pull zone",
+	Long: `List the A and CNAME records in Bunny DNS that match the hostnames
+attached to the pull zone.`,
+	Example: `  hop dns list --key $BUNNY_API_KEY --zone myzone`,
 	Run: func(cmd *cobra.Command, args []string) {
 		handleDNSList()
 	},
@@ -293,21 +450,77 @@ var dnsListCmd = &cobra.Command{
 var dnsCheckCmd = &cobra.Command{
 	Use:   "check",
 	Short: "Check DNS records exist for pull zone hostnames",
+	Long: `Check that every hostname attached to the pull zone has a matching
+DNS record in Bunny DNS.
+
+Exits with status 1 if records are missing, 0 otherwise.`,
+	Example: `  hop dns check --key $BUNNY_API_KEY --zone myzone`,
 	Run: func(cmd *cobra.Command, args []string) {
 		handleDNSCheck()
 	},
 }
 
+var dnsWWWCheckCmd = &cobra.Command{
+	Use:   "www-check",
+	Short: "Check apex domains redirect to their www hostname",
+	Long: `Check that every apex domain (x.tld) whose www hostname (www.x.tld) is
+attached to the pull zone has a Bunny DNS Redirect (RDR) record at the
+apex pointing to https://www.x.tld/.
+
+Exits with status 1 if redirects are missing or wrong, 0 otherwise.`,
+	Example: `  hop dns www-check --key $BUNNY_API_KEY --zone myzone`,
+	Run: func(cmd *cobra.Command, args []string) {
+		handleWWWCheck()
+	},
+}
+
+var dnsWWWAddCmd = &cobra.Command{
+	Use:   "www-add",
+	Short: "Add apex to www redirect (RDR) records",
+	Long: `Create a Bunny DNS Redirect (RDR) record for every apex domain (x.tld)
+whose www hostname (www.x.tld) is attached to the pull zone, redirecting
+the apex to https://www.x.tld/.
+
+The command is idempotent: correct records are left alone, and apex RDR
+records with a different destination are updated in place.`,
+	Example: `  hop dns www-add --key $BUNNY_API_KEY --zone myzone`,
+	Run: func(cmd *cobra.Command, args []string) {
+		handleWWWAdd()
+	},
+}
+
+var dnsWWWRemoveCmd = &cobra.Command{
+	Use:   "www-remove",
+	Short: "Remove apex to www redirect (RDR) records",
+	Long: `Remove the apex Redirect (RDR) records created by www-add. Only records
+pointing to the pull zone's www hostnames are removed; apex redirects
+with other destinations are kept.`,
+	Example: `  hop dns www-remove --key $BUNNY_API_KEY --zone myzone`,
+	Run: func(cmd *cobra.Command, args []string) {
+		handleWWWRemove()
+	},
+}
+
 // Stats command group
 var statsCmd = &cobra.Command{
-	Use:   "stats",
-	Short: "View pull zone statistics",
-	Long:  "View pull zone statistics from Bunny CDN",
+	Use:     "stats",
+	Short:   "View pull zone statistics",
+	Long:    "View pull zone statistics from Bunny CDN.",
+	Example: `  hop stats show --key $BUNNY_API_KEY --zone myzone --days 14`,
 }
 
 var statsShowCmd = &cobra.Command{
 	Use:   "show",
 	Short: "Show usage statistics for a pull zone",
+	Long: `Show bandwidth and request statistics for a pull zone. Defaults to
+daily granularity over the last 7 days (--days accepts 1-30).`,
+	Example: `  hop stats show --key $BUNNY_API_KEY --zone myzone
+
+  # Last 14 days with detailed charts and geographic distribution
+  hop stats show --key $BUNNY_API_KEY --zone myzone --days 14 --detailed
+
+  # Hourly breakdown for the last day
+  hop stats show --key $BUNNY_API_KEY --zone myzone --days 1 --hourly`,
 	Run: func(cmd *cobra.Command, args []string) {
 		handleStatsShow()
 	},
@@ -320,7 +533,18 @@ var minifyCmd = &cobra.Command{
 	Long: `Minify HTML, CSS, JavaScript, SVG, and XML files.
 Converts images to WebP with responsive srcset.
 Converts TTF fonts to WOFF2.
-Inlines critical CSS for faster page loads.`,
+Inlines critical CSS for faster page loads.
+
+Runs entirely locally and needs no API key. <source> is the input
+directory, <target> is the output directory (created if missing).
+WebP conversions are cached between runs in the --cache directory.`,
+	Example: `  hop minify ./public ./dist
+
+  # Reprocess everything, ignoring the conversion cache
+  hop minify ./public ./dist --force
+
+  # Exclude paths by glob pattern
+  hop minify ./public ./dist --exclude "newsletter/**" --exclude "drafts/**"`,
 	Args: cobra.ExactArgs(2),
 	Run: func(cmd *cobra.Command, args []string) {
 		handleMinify(args[0], args[1])
@@ -331,12 +555,20 @@ Inlines critical CSS for faster page loads.`,
 var securityCmd = &cobra.Command{
 	Use:   "security",
 	Short: "Check security headers configuration",
-	Long:  "Check that recommended security HTTP headers are configured as edge rules",
+	Long:  "Check that recommended security HTTP headers are configured as edge rules.",
+	Example: `  hop security check --key $BUNNY_API_KEY --zone myzone
+  hop security fix --key $BUNNY_API_KEY --zone myzone`,
 }
 
 var securityCheckCmd = &cobra.Command{
 	Use:   "check",
 	Short: "Check security headers are configured as edge rules",
+	Long: `Check that recommended security HTTP headers (e.g. Strict-Transport-
+Security, X-Content-Type-Options) are configured as edge rules on the
+pull zone.
+
+Exits with status 1 if required headers are missing, 0 otherwise.`,
+	Example: `  hop security check --key $BUNNY_API_KEY --zone myzone`,
 	Run: func(cmd *cobra.Command, args []string) {
 		handleSecurityCheck()
 	},
@@ -345,6 +577,9 @@ var securityCheckCmd = &cobra.Command{
 var securityFixCmd = &cobra.Command{
 	Use:   "fix",
 	Short: "Add missing security headers as edge rules",
+	Long: `Add edge rules for any recommended security headers that are missing
+on the pull zone. Existing rules are left unchanged.`,
+	Example: `  hop security fix --key $BUNNY_API_KEY --zone myzone`,
 	Run: func(cmd *cobra.Command, args []string) {
 		handleSecurityFix()
 	},
@@ -421,7 +656,10 @@ func handleCDNPush() {
 		os.Exit(1)
 	}
 
-	if purgeCache && successful > 0 {
+	// Purge whenever explicitly requested. Gating on successful > 0 silently
+	// skipped the purge when every file was deduped, leaving stale edge cache
+	// even though the user asked for a purge. Failures already exited above.
+	if purgeCache {
 		fmt.Print("Purging pull zone cache... ")
 		if err := purgePullZoneCache(ctx, apiKey, pullZoneID); err != nil {
 			log.Fatalf("Error purging cache: %v", err)
@@ -769,6 +1007,105 @@ func handleDNSCheck() {
 	}
 }
 
+// setupWWWCommand resolves the pull zone, derives apex->www targets from its
+// hostnames, and loads all DNS zones
+func setupWWWCommand(ctx context.Context) (map[string]string, []DNSZone, error) {
+	pullZoneDetails, err := setupDNSCommand(ctx, apiKey, zone)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	targets := wwwRedirectTargets(pullZoneDetails.Hostnames)
+	if len(targets) == 0 {
+		fmt.Println("No www hostnames attached to this pull zone, nothing to do.")
+		return targets, nil, nil
+	}
+
+	dnsZones, err := getAllDNSZones(ctx, apiKey)
+	if err != nil {
+		return nil, nil, fmt.Errorf("error getting DNS zones: %v", err)
+	}
+
+	return targets, dnsZones, nil
+}
+
+func handleWWWCheck() {
+	baseCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	ctx := createDebugContext(baseCtx)
+
+	targets, dnsZones, err := setupWWWCommand(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if len(targets) == 0 {
+		return
+	}
+
+	result := checkWWWRedirectsStructured(dnsZones, targets)
+
+	for _, success := range result.Successful {
+		fmt.Println(success.Message)
+	}
+	for _, issue := range result.Issues {
+		fmt.Println(issue.Message)
+	}
+
+	for _, issue := range result.Issues {
+		if issue.Severity == "error" {
+			os.Exit(1)
+		}
+	}
+}
+
+func handleWWWAdd() {
+	baseCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	ctx := createDebugContext(baseCtx)
+
+	targets, dnsZones, err := setupWWWCommand(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if len(targets) == 0 {
+		return
+	}
+
+	if err := addWWWRedirects(ctx, apiKey, dnsZones, targets); err != nil {
+		log.Fatalf("Error adding www redirects: %v", err)
+	}
+
+	fmt.Println("\nApex to www redirect records configured successfully.")
+}
+
+func handleWWWRemove() {
+	baseCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	ctx := createDebugContext(baseCtx)
+
+	targets, dnsZones, err := setupWWWCommand(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if len(targets) == 0 {
+		return
+	}
+
+	deleted, err := removeWWWRedirects(ctx, apiKey, dnsZones, targets)
+	if err != nil {
+		log.Fatalf("Error removing www redirects: %v", err)
+	}
+
+	if deleted == 0 {
+		fmt.Println("No apex to www redirect records found to remove.")
+	} else {
+		fmt.Printf("\nRemoved %d apex redirect record(s).\n", deleted)
+	}
+}
+
 func handleGeneralCheck() {
 	baseCtx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
@@ -1070,5 +1407,81 @@ func handleSlashRemove() {
 		fmt.Println("No trailing slash rules found to remove.")
 	} else {
 		fmt.Printf("\nRemoved %d trailing slash rule(s).\n", deleted)
+	}
+}
+
+func handleFlatten() {
+	baseCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	ctx := createDebugContext(baseCtx)
+
+	id, err := findPullZoneByName(ctx, apiKey, zone)
+	if err != nil {
+		log.Fatalf("Error finding pull zone '%s': %v", zone, err)
+	}
+	zoneID := fmt.Sprintf("%d", id)
+	fmt.Printf("Found pull zone '%s' with ID: %s\n\n", zone, zoneID)
+
+	rules, err := listEdgeRules(ctx, apiKey, zoneID)
+	if err != nil {
+		log.Fatalf("Error listing edge rules: %v", err)
+	}
+
+	chains, problems := findRedirectChains(rules)
+
+	for _, problem := range problems {
+		fmt.Printf("UNRESOLVED: %v\n", problem)
+	}
+
+	if len(chains) == 0 {
+		if len(problems) > 0 {
+			os.Exit(1)
+		}
+		fmt.Println("No redirect chains found. Every redirect goes straight to its destination.")
+		return
+	}
+
+	chainWord := "chain"
+	if len(chains) != 1 {
+		chainWord = "chains"
+	}
+	fmt.Printf("Found %d redirect %s:\n\n", len(chains), chainWord)
+
+	for i, chain := range chains {
+		name := chain.Rule.Description
+		if name == "" {
+			name = chain.Rule.Guid
+		}
+		fmt.Printf("%d. %s\n", i+1, name)
+		fmt.Printf("   GUID: %s\n", chain.Rule.Guid)
+		fmt.Printf("   Patterns: %s\n", strings.Join(chain.Sources, ", "))
+		fmt.Printf("   Path: %s\n", strings.Join(append([]string{chain.Current}, chain.Hops...), "\n         -> "))
+		fmt.Printf("   Retarget to: %s\n", chain.Final)
+		fmt.Println()
+	}
+
+	if dryRun {
+		fmt.Println("Dry run: nothing was changed.")
+		return
+	}
+
+	updated := 0
+	for _, chain := range chains {
+		if err := retargetEdgeRule(ctx, apiKey, zoneID, chain.Rule, chain.Final); err != nil {
+			fmt.Printf("ERROR retargeting rule %s: %v\n", chain.Rule.Guid, err)
+			continue
+		}
+		updated++
+	}
+
+	ruleWord := "rule"
+	if updated != 1 {
+		ruleWord = "rules"
+	}
+	fmt.Printf("\nFlattened %d %s.\n", updated, ruleWord)
+
+	if updated != len(chains) || len(problems) > 0 {
+		os.Exit(1)
 	}
 }
